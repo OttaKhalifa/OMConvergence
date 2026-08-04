@@ -167,29 +167,38 @@ digit for digit.
 
 Two figures:
 
-1. **One axis for both $n$ and $N$.** The exact-recovery bound
+1. **A path of increasing $(N, n)$.** The exact-recovery bound
    $N^2\exp(-\varepsilon^2 n/(2C^\star))$ rewrites as
    $\exp\bigl(2\log N\,(1 - \lambda/\lambda^\star)\bigr)$ with $\lambda := n/\log N$ and
-   $\lambda^\star := 4C^\star/\varepsilon^2$: the two sample sizes enter **only through the ratio
-   $\lambda$**, the remaining $\log N$ sharpening the transition without moving it. The figure has
-   two panels — mean ARI against $n$, one curve per $N$, and the *same* points against $n/\log N$ —
-   so the collapse is shown rather than asserted.
+   $\lambda^\star := 4C^\star/\varepsilon^2$: it is a statement about neither $n \to \infty$ at
+   fixed $N$ nor $N \to \infty$ at fixed $n$, but about a regime where the two sample sizes grow
+   together and $\lambda$ passes $\lambda^\star$.
 
-   Two choices make the test clean. The **mixture is fixed** ($K = 2$, $\alpha = 0.3$, kernels drawn
-   once, first draw, no selection) and only the labels and trajectories are redrawn, so everything
-   the bound depends on besides $n$ and $N$ is held constant and $\lambda$ is the only free
-   combination left. And the **grid is in $\lambda$, not in $n$**: for each $N$ the horizons are
-   $n = \lfloor\lambda\log N\rceil$ over a common $\lambda \in [3, 70]$ grid, so all the $N$ land on
-   the same abscissae in the right panel by construction, and the budget adapts on its own — short
-   sequences for small $N$, where the transition happens earlier. Horizons within one $N$ are again
-   nested prefixes; the band is the 10th-to-90th percentile over replicates, whose number decreases
-   with $N$ ($R = \max(8, 1600/N)$) since the ARI of a large sample already averages over many pairs.
+   The design is therefore the two quantities one actually has, set directly: an explicit list of
+   strictly increasing pairs $(N_i, n_i)$ — no cross product, and no horizon derived from a target
+   $\lambda$. The lengths are picked so that the *realised* $\lambda_i = n_i/\log N_i$ grows
+   linearly along the path (increment $\approx 6$, maximum deviation from a straight line $0.2$),
+   $N$ running over $\{10, 14, 20, 28, 40, 56, 80, 110, 150, 210, 290, 400\}$ and $n$ over
+   $\{8, \dots, 420\}$, a factor $40$ and a factor $50$. $\lambda$ is a readout of the design, not
+   a control. The figure carries all three: abscissa $\lambda$, marker colour $N$, upper axis $n$.
 
-   $N \in \{10, 25, 60, 150, 400\}$, a factor $2.6$ in $\log N$, which is the lever of the
-   rescaling. Printed alongside: the $n$ and the $\lambda$ at which the mean ARI crosses $0.5$ for
-   each $N$, and the coefficient of variation of each across $N$ — the rescaling is the right one to
-   the extent that the second is the smaller. Runtime ~2 min, of which 108 s is $N = 400$ alone;
-   adding $N = 1000$ widens the lever to $3.0$ and costs ~13 min more on its own.
+   **The path is nested in both directions.** One replicate draws $N_{\max}$ sequences of length
+   $n_{\max}$ once and reads the point $i$ on the *first* $N_i$ of them truncated to their *first*
+   $n_i$ symbols, so a replicate is a single dataset growing in $N$ and in $n$ — the
+   two-dimensional analogue of the nested prefixes used everywhere else — and not a sequence of
+   independent draws. It is also nearly free: a pair of sequences is aligned once up to $n_{\max}$,
+   so the whole path costs what its last point costs, $O(N_{\max}^2 n_{\max}^2)$ per replicate.
+   $R = 12$ replicates, band = 10th-to-90th percentile, runtime ~3 min. The **mixture is fixed**
+   ($K = 2$, $\alpha = 0.3$, kernels drawn once, first draw, no selection) and only the labels and
+   trajectories are redrawn, so everything the bound depends on besides $n$ and $N$ is held
+   constant along the path. Printed alongside: the whole design table — $N$, $n$, $\lambda$, mean
+   ARI, $\mathbb P(\mathrm{ARI}=1)$, median margin — and the $\lambda$, $N$, $n$ at which the mean
+   ARI crosses $0.5$ and $0.99$.
+
+   What one path cannot do is separate "the transition is governed by $\lambda$" from "governed by
+   $n$", since $N$ and $n$ move together; that would need several $N$ at a common $\lambda$. What
+   it shows is the weaker and more directly useful statement — that recovery sets in along the
+   joint regime the theorem describes, and where.
 
    **Why $K = 2$ here.** Measuring a threshold needs the threshold inside the observation window,
    and at $K = 3$ an unselected Dirichlet draw is a lottery: over 9 draws at
@@ -200,8 +209,8 @@ Two figures:
    from the union bound over the $\binom{N}{2}$ pairs, which does not involve $K$ — the dependence on
    $K$ is what the grid below is for. The draw actually used has $\hat\Delta_{\mathrm{in}} = 0.729$,
    $\hat\Delta_{\mathrm{out}} = 1.030$, margin $+0.301$ at $n = 800$, and the mean ARI crosses $0.5$
-   around $\lambda \approx 25$ — hence the upper end of the $\lambda$ grid, chosen to leave the
-   plateau at $\mathrm{ARI} = 1$ visible.
+   around $\lambda \approx 25$ — hence the upper end of the path, chosen to leave the plateau at
+   $\mathrm{ARI} = 1$ visible.
 2. **The $(\alpha, K)$ grid.** Same grid as experiment 2 — $\alpha \in \{0.1, \dots, 10\}$,
    $K \in \{2,\dots,10\}$, new chains at every repetition — with $N = 60$, $R = 15$ and two horizons
    $n \in \{150, 600\}$ evaluated on nested prefixes. Mean ARI and $\mathbb P(\mathrm{ARI} = 1)$ per cell,
@@ -267,7 +276,7 @@ between $n = 1500$ and $n = 8000$ over 25 draws.
 | `Assumptions/assumptions_gamma_margins.pdf` | the four conditions, colour = median signed margin (diverging, pivot at 0) |
 | `Assumptions/assumption_<name>.pdf` | one panel per condition, probability in colour, probability and margin annotated per cell |
 | `Assumptions/assumptions_gamma_levels.pdf` | median $\Delta_{\mathrm{in}}$ and $\Delta_{\mathrm{out}}$ separately |
-| `Recovery/ari_collapse_single_linkage.pdf` | experiment 3, mean ARI against $n$ and against $n/\log N$, one curve per $N$ |
+| `Recovery/ari_path_single_linkage.pdf` | experiment 3, mean ARI along the path of increasing $(N, n)$, against $n/\log N$ |
 | `Recovery/ari_grid_single_linkage.pdf` | experiment 3, mean ARI and $\mathbb P(\mathrm{ARI}=1)$ on the $(\alpha,K)$ grid, annotated with the median margin |
 | `Recovery/ari_vs_separation.pdf` | experiment 3, mean ARI against the median separation margin, one marker per cell |
 | `Recovery/ari_grid_horizons.pdf` | experiment 3, mean ARI at the two horizons side by side |
@@ -302,13 +311,15 @@ Also open: the largest-gap estimator of $K$ (`largest_gap_k` exists but no exper
 the section "Numerical Illustrations" of `paper.txt`, still a placeholder — its item list has a
 stray duplicated `\item` at the third bullet.
 
-One extension of the rescaling of experiment 3, left aside for now. The curves for different $N$ are
-not expected to coincide exactly: the bound $\exp(2\log N(1-\lambda/\lambda^\star))$ has a common
-threshold $\lambda^\star$ but an exponent proportional to $\log N$, so the transition **sharpens**
-with $N$ and the curves pivot around $\lambda^\star$ rather than superposing. The toy model
+Two extensions of experiment 3, left aside for now. The first is what the single path deliberately
+drops: **several $N$ at a common $\lambda$**, the only design that separates a transition governed
+by $\lambda$ from one governed by $n$. The curves would not superpose exactly anyway — the bound
+$\exp(2\log N(1-\lambda/\lambda^\star))$ has a common threshold $\lambda^\star$ but an exponent
+proportional to $\log N$, so the transition **sharpens** with $N$ and the curves pivot around
+$\lambda^\star$. The toy model
 $\mathbb P(\text{success}) \approx \exp(-\tfrac12 e^{2\log N(1-\lambda/\lambda^\star)})$ even puts the
-crossing height at $e^{-1/2} \approx 0.61$, independently of $N$; testing that is a natural
-refinement of the right-hand panel. Going further, $\lambda^\star = 4C^\star/\varepsilon^2$ with
+crossing height at $e^{-1/2} \approx 0.61$, independently of $N$, which is the sharpest form of the
+prediction. Going further, $\lambda^\star = 4C^\star/\varepsilon^2$ with
 $\varepsilon = \eta/2$ and $C^\star = C_{\mathrm{Pau}}M^2\tau_{\mathrm{mix}}$, so
 $n\eta^2/(M^2\tau_{\mathrm{mix}}\log N)$ would put every $(N, \alpha, K)$ on one master curve whose
 threshold is the universal constant $16\,C_{\mathrm{Pau}}$ — but that measures how tight Paulin's

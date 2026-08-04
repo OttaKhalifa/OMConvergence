@@ -4,7 +4,14 @@
       "Bash(python3)",
       "Bash(python3 -c ' *)",
       "Bash(python -c ' *)",
-      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)"
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(python3 -)",
+      "Bash(timeout 1200 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/kmedoids_probe.py\")",
+      "Bash(timeout 1800 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/smoke.py\")",
+      "Bash(timeout 900 python3 check_clustering.py)",
+      "Bash(timeout 900 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/degeneracy.py\")",
+      "Bash(timeout 600 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/smoke.py\")",
+      "Bash(timeout 900 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/smoke.py\")"
     ]
   }
 }

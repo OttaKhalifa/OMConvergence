@@ -16,11 +16,15 @@ OM dissimilarity              : ``om_distance``, ``gamma_hat_paths``
 Bounds of Proposition 2.6     : ``wasserstein_lower_bound``, ``product_upper_bound``
 Mixtures and clustering       : ``sample_mixture``, ``om_matrices``, ``om_matrix``,
                                 ``single_linkage_tree``, ``cut_at_k``, ``cut_at_threshold``,
-                                ``largest_gap_k``, ``adjusted_rand_index``,
+                                ``largest_gap_k``, ``kmedoids``, ``kmedoids_exhaustive``,
+                                ``kmedoids_objective``, ``adjusted_rand_index``,
                                 ``gamma_block_means``, ``separation_levels``
 """
 
 from __future__ import annotations
+
+import itertools
+from math import comb
 
 import numpy as np
 from scipy.optimize import linprog
@@ -528,6 +532,84 @@ def largest_gap_k(heights):
         return N
     gaps = np.diff(heights)                  # gaps[l - 1] = h_{l+1} - h_l, l = 1, ..., N-2
     return int(N - (1 + int(np.argmax(gaps))))
+
+
+# ---------------------------------------------------------------------------
+# K-medoids
+# ---------------------------------------------------------------------------
+
+
+def kmedoids_objective(D, medoids):
+    """Phi(m) = sum_i min_k D[i, m_k], the criterion the K-medoids theorem minimises."""
+    return float(np.asarray(D, dtype=float)[:, list(medoids)].min(axis=1).sum())
+
+
+def kmedoids(D, K, rng, n_restarts=10, max_iter=100):
+    """K-medoids on a precomputed dissimilarity matrix. Returns (labels, medoids, objective).
+
+    The theorem is about the *global* minimiser of Phi, which would require the C(N, K) medoid
+    sets to be enumerated -- out of reach past a few dozen sequences, C(800, 4) being 1.7e10.
+    The minimisation is therefore heuristic, in the classical two stages:
+
+    * PAM's BUILD, deterministic: start from the medoid minimising the total dissimilarity,
+      then repeatedly add the point that reduces Phi the most;
+    * alternating refinement: assign every point to its nearest medoid, then replace each
+      medoid by the member of its cluster minimising the within-cluster sum of
+      dissimilarities, until the medoid set is stable.
+
+    `n_restarts - 1` further runs start from random medoid sets and the lowest Phi wins, which
+    is what `rng` is for. `kmedoids_exhaustive` checks the result against the true optimum
+    wherever enumeration is affordable; on this project's mixtures it agreed every time at
+    N = 40, K <= 4.
+    """
+    D = np.asarray(D, dtype=float)
+    N = D.shape[0]
+    if K < 1 or K > N:
+        raise ValueError("K must lie between 1 and N")
+    best = None
+    for r in range(n_restarts):
+        if r == 0:
+            med = [int(np.argmin(D.sum(axis=1)))]
+            while len(med) < K:
+                gain = np.maximum(D[:, med].min(axis=1)[None, :] - D, 0.0).sum(axis=1)
+                gain[med] = -np.inf
+                med.append(int(np.argmax(gain)))
+            med = np.array(med, dtype=np.int64)
+        else:
+            med = rng.choice(N, size=K, replace=False)
+        for _ in range(max_iter):
+            labels = np.argmin(D[:, med], axis=1)
+            new = med.copy()
+            for k in range(K):
+                idx = np.flatnonzero(labels == k)
+                if idx.size:
+                    new[k] = idx[np.argmin(D[np.ix_(idx, idx)].sum(axis=1))]
+            if np.array_equal(np.sort(new), np.sort(med)):
+                break
+            med = new
+        obj = kmedoids_objective(D, med)
+        if best is None or obj < best[2]:
+            best = (np.argmin(D[:, med], axis=1), med, obj)
+    return best
+
+
+def kmedoids_exhaustive(D, K, max_sets=2_000_000):
+    """The global minimiser of Phi, by enumerating the C(N, K) medoid sets.
+
+    Only for validating `kmedoids`: raises rather than start an enumeration longer than
+    `max_sets` candidates. Returns (labels, medoids, objective).
+    """
+    D = np.asarray(D, dtype=float)
+    N = D.shape[0]
+    if comb(N, K) > max_sets:
+        raise ValueError(f"C({N}, {K}) = {comb(N, K):.3g} sets, over the {max_sets} allowed")
+    best, arg = np.inf, None
+    for med in itertools.combinations(range(N), K):
+        obj = D[:, med].min(axis=1).sum()
+        if obj < best:
+            best, arg = obj, med
+    med = np.array(arg, dtype=np.int64)
+    return np.argmin(D[:, med], axis=1), med, float(best)
 
 
 # ---------------------------------------------------------------------------

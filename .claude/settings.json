@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(.venv/bin/python -c \"import numba, matplotlib, tqdm; print\\('venv ok', matplotlib.__version__\\)\")",
+      "Bash(.venv-1/bin/python -c \"import numba, matplotlib, tqdm, scipy; print\\('venv-1 ok, mpl', matplotlib.__version__\\)\")",
+      "Bash(python3 -c \"import numba, matplotlib, tqdm, scipy, numpy; print\\('system ok, mpl', matplotlib.__version__, 'numpy', numpy.__version__\\)\")",
+      "Bash(timeout 900 python3 smoke.py)",
+      "Bash(timeout 900 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/smoke.py\")",
+      "Bash(python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/knobs.py\")",
+      "Bash(timeout 900 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/budget.py\")",
+      "Bash(timeout 1200 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/locate.py\")",
+      "Bash(python3 -)",
+      "Bash(timeout 600 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/check_design.py\")",
+      "Bash(timeout 900 python3 \"/tmp/claude-1001/-home-ottavio-Bureau-OM-convergence-project-OM-Convergence-OMConvergence/a526c21c-66c6-47ac-8b54-f9f9bca0ab9b/scratchpad/check_design.py\")",
+      "Bash(ps -eo pid,ppid,etime,pcpu,pmem,rss,comm,args --sort=-pcpu)",
+      "Bash(ps -eo pid,etime,pcpu,rss,args)",
+      "Bash(ls -l /run/user/1001/jupyter/runtime/ 2>/dev/null | tail -8; echo \"--- kernels vivants ---\"; pgrep -af ipykernel_launcher | cut -c1-100)",
+      "Read(//run/user/1001/jupyter/runtime/**)",
+      "Bash(ps -o pid,etime,pcpu,rss,stat,args -p 9738)"
+    ]
+  }
+}
