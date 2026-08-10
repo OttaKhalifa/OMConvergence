@@ -4,30 +4,30 @@
 
 Notation follows the paper: the alphabet is Sigma = {0, ..., d-1}, the substitution cost
 matrix is S = (c_sub(a, b))_{a,b}, and the gap cost is delta = (delta(a))_a, so that the
-extended cost dbar of equation (2.1) is recovered from the pair (S, delta).
+extended cost dbar of equation (1) is recovered from the pair (S, delta).
 
 Contents
 --------
 Cost schemes and Assumption 1 : ``cost_scheme``, ``check_assumption_metric``
 Markov chains                 : ``sample_markov_model``, ``sample_chain_order1``,
-                                ``simulate_markov_sequence``, ``stationary_distribution_markov``,
-                                ``stationary_symbol_distribution``, ``spectral_gap``
-OM dissimilarity              : ``om_distance``, ``gamma_hat_paths``
-Bounds of Proposition 2.6     : ``wasserstein_lower_bound``, ``product_upper_bound``
-Mixtures and clustering       : ``sample_mixture``, ``om_matrices``, ``om_matrix``,
-                                ``single_linkage_tree``, ``cut_at_k``, ``cut_at_threshold``,
-                                ``largest_gap_k``, ``kmedoids``, ``kmedoids_exhaustive``,
+                                ``stationary_distribution_markov``, ``spectral_gap``
+OM dissimilarity              : ``om_distance``, ``gamma_hat_pairs``, ``gamma_hat_paths``
+Bounds of Proposition 2.8     : ``wasserstein_lower_bound``, ``product_upper_bound``
+Mixtures and clustering       : ``sample_mixture``, ``om_matrices``,
+                                ``single_linkage_tree``, ``cut_at_k``, ``largest_gap_k``,
+                                ``average_linkage_labels``, ``kmedoids``,
                                 ``kmedoids_objective``, ``adjusted_rand_index``,
                                 ``gamma_block_means``, ``separation_levels``
+
+Every function here is used by one of the three notebooks.
 """
 
 from __future__ import annotations
 
-import itertools
-from math import comb
-
 import numpy as np
+from scipy.cluster.hierarchy import fcluster, linkage as scipy_linkage
 from scipy.optimize import linprog
+from scipy.spatial.distance import squareform
 
 try:
     from numba import njit, prange
@@ -93,18 +93,6 @@ def compute_trate_subst_matrix(sequences, n_states=None, pad_value=None, smoothi
     return S
 
 
-def choose_indel_cost(subst_cost, strategy="median_nonzero"):
-    """Scalar gap cost derived from the substitution costs."""
-    d = subst_cost.shape[0]
-    offdiag = subst_cost[~np.eye(d, dtype=bool)]
-    offdiag = offdiag[offdiag > 0]
-    if offdiag.size == 0:
-        return 1.0
-    if strategy == "mean_nonzero":
-        return float(offdiag.mean())
-    return float(np.median(offdiag))
-
-
 def cost_scheme(name, d, rng=None, pilot_sequences=None,
                 sub=2.0, indel=1.0, low=1.2, high=2.0):
     """Return the pair (S, delta) for one of the three cost schemes.
@@ -165,26 +153,13 @@ def _expand_dirichlet_alpha(alpha, n_rows, n_cols, name="alpha"):
     return arr
 
 
-def _context_to_index(context, n_states):
-    idx = 0
-    for s in context:
-        idx = idx * n_states + int(s)
-    return idx
-
-
-def _index_to_context(idx, n_states, order):
-    context = [0] * order
-    for pos in range(order - 1, -1, -1):
-        context[pos] = int(idx % n_states)
-        idx //= n_states
-    return context
-
-
 def sample_markov_model(n_states, order_k, alpha, rng, alpha_init=None):
     """Order-`order_k` Markov model with rows drawn from a Dirichlet(`alpha`) prior.
 
     The returned dictionary holds the (n_states ** order_k, n_states) transition array; for
-    order_k = 1 this array is the transition matrix P itself.
+    order_k = 1 this array is the transition matrix P itself, which is the only case the
+    notebooks use. `init_probs` is left in place, and drawn, because every figure of the paper
+    is reproduced from a fixed seed: removing the draw would shift the random stream.
     """
     if order_k < 1:
         raise ValueError("order_k must be >= 1")
@@ -203,27 +178,6 @@ def sample_markov_model(n_states, order_k, alpha, rng, alpha_init=None):
         init_probs = rng.dirichlet(_expand_dirichlet_alpha(alpha_init, 1, n_contexts)[0])
     return {"n_states": n_states, "order": order_k,
             "transitions": transitions, "init_probs": init_probs}
-
-
-def _sample_initial_context(model, rng):
-    order, n_states, p = model["order"], model["n_states"], model["init_probs"]
-    if order == 1:
-        return [int(rng.choice(n_states, p=p))]
-    return _index_to_context(int(rng.choice(p.size, p=p)), n_states, order)
-
-
-def _sample_next_state(model, context, rng):
-    idx = _context_to_index(context, model["n_states"])
-    return int(rng.choice(model["n_states"], p=model["transitions"][idx]))
-
-
-def simulate_markov_sequence(model, n, rng):
-    """Length-n trajectory of a model of arbitrary order, started from `init_probs`."""
-    order = model["order"]
-    seq = list(_sample_initial_context(model, rng))
-    while len(seq) < n:
-        seq.append(_sample_next_state(model, seq[-order:], rng))
-    return np.asarray(seq[:n], dtype=np.int64)
 
 
 @njit(cache=True)
@@ -267,33 +221,6 @@ def stationary_distribution_markov(P, init=None, tol=1e-12, max_iter=200_000):
             break
         v = v_next
     return v / v.sum()
-
-
-def build_context_transition_matrix(model):
-    """Transition matrix of the context chain of an order > 1 model."""
-    n_states, order_k = model["n_states"], model["order"]
-    if order_k <= 1:
-        raise ValueError("order_k must be > 1 for a context transition matrix")
-    n_contexts = n_states ** order_k
-    Q = np.zeros((n_contexts, n_contexts), dtype=float)
-    for i in range(n_contexts):
-        ctx = _index_to_context(i, n_states, order_k)
-        for a, p in enumerate(model["transitions"][i]):
-            if p > 0:
-                Q[i, _context_to_index(ctx[1:] + [a], n_states)] += p
-    return Q
-
-
-def stationary_symbol_distribution(model):
-    """Stationary law of the observed symbol, for a model of arbitrary order."""
-    if model["order"] == 1:
-        return stationary_distribution_markov(model["transitions"])
-    Q = build_context_transition_matrix(model)
-    pi_ctx = stationary_distribution_markov(Q, init=model.get("init_probs"))
-    pi_sym = np.zeros(model["n_states"], dtype=float)
-    for idx in range(Q.shape[0]):
-        pi_sym[_index_to_context(idx, model["n_states"], model["order"])[-1]] += pi_ctx[idx]
-    return pi_sym / pi_sym.sum()
 
 
 def spectral_gap(P):
@@ -447,11 +374,6 @@ def om_matrices(X, grid, S, delta):
     return out
 
 
-def om_matrix(X, S, delta):
-    """The (N, N) normalised OM dissimilarity matrix at the full length of the sequences."""
-    return om_matrices(X, [X.shape[1]], S, delta)[0]
-
-
 # ---------------------------------------------------------------------------
 # Single-linkage clustering
 # ---------------------------------------------------------------------------
@@ -513,25 +435,57 @@ def _components(edges, N):
 
 
 def cut_at_k(edges, N, K):
-    """Single-linkage partition into K blocks: the first N-K merges, i.e. Definition 4.2
+    """Single-linkage partition into K blocks: the first N-K merges, i.e. Definition 3.2
     stopped at N-K steps. K >= N returns the singletons."""
     return _components(edges[:max(N - K, 0)], N)
 
 
-def cut_at_threshold(heights, edges, N, t):
-    """Single-linkage partition at level t: the connected components of {D <= t}, which is
-    the graph G_t of Theorem 4.4. The number of blocks is whatever the data gives."""
-    return _components(edges[heights <= t], N)
-
-
 def largest_gap_k(heights):
-    """The largest-gap estimator of K, equation (4.4): K = N - argmax_l (h_{l+1} - h_l),
+    """The largest-gap estimator of K, equation (6): K = N - argmax_l (h_{l+1} - h_l),
     over 1 <= l <= N-2, taking the smallest index in case of tie."""
     N = heights.size + 1
     if N < 3:
         return N
     gaps = np.diff(heights)                  # gaps[l - 1] = h_{l+1} - h_l, l = 1, ..., N-2
     return int(N - (1 + int(np.argmax(gaps))))
+
+
+def average_linkage_labels(D, K):
+    """Average-linkage partition of a precomputed dissimilarity matrix into K blocks.
+
+    Delegated to scipy, whose implementation is the reference one. This estimator is *not*
+    covered by the paper's theory -- Remark 3.4 covers bracketed linkages, of which it is one -- and
+    is here only as an empirical control for single linkage. The contrast is the point: single
+    linkage merges two blocks on the *smallest* dissimilarity between them, so one aberrant
+    sequence suffices to chain them together, and the cut at K then spends a whole block on
+    that sequence; average linkage merges on the mean over all pairs between the two blocks,
+    where no single sequence can carry the decision.
+
+    The tree comes from scipy, the reference implementation of UPGMA. Note that `squareform`
+    hands it the *condensed* form, so it reads a dissimilarity matrix and not a set of
+    observation vectors. The cut, however, is ours: exactly the first N-K merges, as in
+    `cut_at_k`, rather than `fcluster(..., "maxclust")`, which returns *at most* K blocks by
+    choosing a threshold and can therefore return fewer when merge heights are tied -- and
+    integer costs make them tied constantly. Both linkages then obey literally the same rule.
+    """
+    D = np.asarray(D, dtype=float)
+    N = D.shape[0]
+    if N < 2:
+        return np.zeros(N, dtype=np.int64)
+    Z = scipy_linkage(squareform(D, checks=False), method="average")
+    parent = np.arange(2 * N - 1)
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for m in range(max(N - K, 0)):                    # the first N - K merges of the tree
+        parent[find(int(Z[m, 0]))] = N + m
+        parent[find(int(Z[m, 1]))] = N + m
+    seen = {}
+    return np.array([seen.setdefault(find(i), len(seen)) for i in range(N)], dtype=np.int64)
 
 
 # ---------------------------------------------------------------------------
@@ -558,9 +512,9 @@ def kmedoids(D, K, rng, n_restarts=10, max_iter=100):
       dissimilarities, until the medoid set is stable.
 
     `n_restarts - 1` further runs start from random medoid sets and the lowest Phi wins, which
-    is what `rng` is for. `kmedoids_exhaustive` checks the result against the true optimum
-    wherever enumeration is affordable; on this project's mixtures it agreed every time at
-    N = 40, K <= 4.
+    is what `rng` is for. Checked against the global optimum by enumeration wherever that was
+    affordable: on this project's mixtures the heuristic reached it every time at N = 40,
+    K <= 4.
     """
     D = np.asarray(D, dtype=float)
     N = D.shape[0]
@@ -593,25 +547,6 @@ def kmedoids(D, K, rng, n_restarts=10, max_iter=100):
     return best
 
 
-def kmedoids_exhaustive(D, K, max_sets=2_000_000):
-    """The global minimiser of Phi, by enumerating the C(N, K) medoid sets.
-
-    Only for validating `kmedoids`: raises rather than start an enumeration longer than
-    `max_sets` candidates. Returns (labels, medoids, objective).
-    """
-    D = np.asarray(D, dtype=float)
-    N = D.shape[0]
-    if comb(N, K) > max_sets:
-        raise ValueError(f"C({N}, {K}) = {comb(N, K):.3g} sets, over the {max_sets} allowed")
-    best, arg = np.inf, None
-    for med in itertools.combinations(range(N), K):
-        obj = D[:, med].min(axis=1).sum()
-        if obj < best:
-            best, arg = obj, med
-    med = np.array(arg, dtype=np.int64)
-    return np.argmin(D[:, med], axis=1), med, float(best)
-
-
 # ---------------------------------------------------------------------------
 # Agreement between partitions, and plug-in estimates of Gamma
 # ---------------------------------------------------------------------------
@@ -621,7 +556,7 @@ def adjusted_rand_index(a, b):
     """Adjusted Rand Index between two labellings of the same N items.
 
     Equals 1 exactly when the two partitions coincide, and has expectation 0 under the
-    permutation model, so ARI = 1 is the exact-recovery event of Theorem 4.4.
+    permutation model, so ARI = 1 is the exact-recovery event of Theorem 3.3.
     """
     a = np.unique(np.asarray(a), return_inverse=True)[1]
     b = np.unique(np.asarray(b), return_inverse=True)[1]
@@ -674,7 +609,7 @@ def separation_levels(D, labels, K):
 
 
 # ---------------------------------------------------------------------------
-# Bounds of Proposition 2.6
+# Bounds of Proposition 2.8
 # ---------------------------------------------------------------------------
 
 
