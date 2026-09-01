@@ -6,17 +6,29 @@ knows how D was computed, so they apply unchanged to either OM path of ``om``.
 
 Contents
 --------
-Single linkage : ``single_linkage_tree``, ``cut_at_k``, ``largest_gap_k``
-Average linkage : ``average_linkage_labels``
-K-medoids      : ``kmedoids``, ``kmedoids_objective``
-Scoring        : ``adjusted_rand_index``, ``gamma_block_means``, ``separation_levels``
+Hierarchical   : ``hac_labels`` (single, complete, average), ``single_linkage_tree``,
+                 ``cut_at_k``
+PAM            : ``pam``, ``pam_objective``, ``pam_certify_one_swap``
+Selecting K    : ``profile_distances``, ``profile_graph_k``
+Scoring        : ``exact_recovery`` (the primary outcome), ``adjusted_rand_index``
+
+Two estimators the paper states are implemented here in the form it states them: the
+HAC cut is *exactly* the first N-K merges, and PAM is the strictly-improving one-swap
+algorithm whose stationary point Theorem 3.8 is about -- not an alternating heuristic
+that happens to converge nearby.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.cluster.hierarchy import linkage as scipy_linkage
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import squareform
+
+# Only for the O(N^3) profile distances; `om` owns the pure-Python fallback.
+from om import njit, prange
 
 # ---------------------------------------------------------------------------
 # Single-linkage clustering
@@ -84,39 +96,8 @@ def cut_at_k(edges, N, K):
     return _components(edges[:max(N - K, 0)], N)
 
 
-def largest_gap_k(heights):
-    """The largest-gap estimator of K, equation (6): K = N - argmax_l (h_{l+1} - h_l),
-    over 1 <= l <= N-2, taking the smallest index in case of tie."""
-    N = heights.size + 1
-    if N < 3:
-        return N
-    gaps = np.diff(heights)                  # gaps[l - 1] = h_{l+1} - h_l, l = 1, ..., N-2
-    return int(N - (1 + int(np.argmax(gaps))))
-
-
-def average_linkage_labels(D, K):
-    """Average-linkage partition of a precomputed dissimilarity matrix into K blocks.
-
-    Delegated to scipy, whose implementation is the reference one. This estimator is *not*
-    covered by the paper's theory -- Remark 3.4 covers bracketed linkages, of which it is one -- and
-    is here only as an empirical control for single linkage. The contrast is the point: single
-    linkage merges two blocks on the *smallest* dissimilarity between them, so one aberrant
-    sequence suffices to chain them together, and the cut at K then spends a whole block on
-    that sequence; average linkage merges on the mean over all pairs between the two blocks,
-    where no single sequence can carry the decision.
-
-    The tree comes from scipy, the reference implementation of UPGMA. Note that `squareform`
-    hands it the *condensed* form, so it reads a dissimilarity matrix and not a set of
-    observation vectors. The cut, however, is ours: exactly the first N-K merges, as in
-    `cut_at_k`, rather than `fcluster(..., "maxclust")`, which returns *at most* K blocks by
-    choosing a threshold and can therefore return fewer when merge heights are tied -- and
-    integer costs make them tied constantly. Both linkages then obey literally the same rule.
-    """
-    D = np.asarray(D, dtype=float)
-    N = D.shape[0]
-    if N < 2:
-        return np.zeros(N, dtype=np.int64)
-    Z = scipy_linkage(squareform(D, checks=False), method="average")
+def _cut_scipy_tree(Z, N, K):
+    """Labels of the partition left by the first N-K merges of a scipy linkage tree."""
     parent = np.arange(2 * N - 1)
 
     def find(a):
@@ -132,70 +113,220 @@ def average_linkage_labels(D, K):
     return np.array([seen.setdefault(find(i), len(seen)) for i in range(N)], dtype=np.int64)
 
 
+HAC_METHODS = ("single", "complete", "average")
+
+
+def hac_labels(D, K, method="average"):
+    """Hierarchical partition of a precomputed dissimilarity matrix into K blocks.
+
+    `method` is one of `HAC_METHODS`. All three are *bracketed* linkages in the sense of
+    Remark 3.4 -- single and complete are the two extremes of the bracket, average lies
+    between them -- so the consistency theorem covers all three, and comparing them
+    measures only what the theory leaves free.
+
+    The tree comes from scipy, the reference implementation; `squareform` hands it the
+    *condensed* form, so it reads a dissimilarity matrix and not a set of observation
+    vectors. The cut is ours: exactly the first N-K merges, as in `cut_at_k`, rather than
+    `fcluster(..., "maxclust")`, which returns *at most* K blocks by choosing a threshold
+    and can therefore return fewer when merge heights are tied -- and integer costs make
+    them tied constantly. Every linkage then obeys literally the same rule, which is what
+    makes the comparison between them meaningful.
+    """
+    if method not in HAC_METHODS:
+        raise ValueError(f"method must be one of {HAC_METHODS}, got {method!r}")
+    D = np.asarray(D, dtype=float)
+    N = D.shape[0]
+    if N < 2:
+        return np.zeros(N, dtype=np.int64)
+    Z = scipy_linkage(squareform(D, checks=False), method=method)
+    return _cut_scipy_tree(Z, N, K)
+
+
 
 # ---------------------------------------------------------------------------
-# K-medoids
+# PAM (K-medoids)
 # ---------------------------------------------------------------------------
 
 
-def kmedoids_objective(D, medoids):
-    """Phi(m) = sum_i min_k D[i, m_k], the criterion the K-medoids theorem minimises."""
-    return float(np.asarray(D, dtype=float)[:, list(medoids)].min(axis=1).sum())
+def pam_objective(D, medoids):
+    """Phi(M) = (1/N) sum_i min_{m in M} D[i, m], the criterion of Definition 3.7.
+
+    Normalised by N, as in the paper. The normalisation is irrelevant to which medoid set
+    minimises Phi, but it makes the value comparable across N, and it is the number the
+    theory speaks about.
+    """
+    D = np.asarray(D, dtype=float)
+    return float(D[:, np.asarray(medoids, dtype=np.int64)].min(axis=1).mean())
 
 
-def kmedoids(D, K, rng, n_restarts=10, max_iter=100):
-    """K-medoids on a precomputed dissimilarity matrix. Returns (labels, medoids, objective).
+def _pam_build(D, K):
+    """PAM's BUILD: the deterministic greedy initialisation, K medoids.
 
-    The theorem is about the *global* minimiser of Phi, which would require the C(N, K) medoid
-    sets to be enumerated -- out of reach past a few dozen sequences, C(800, 4) being 1.7e10.
-    The minimisation is therefore heuristic, in the classical two stages:
+    Start from the point minimising the total dissimilarity, then repeatedly add the point
+    that reduces Phi the most. This is only an initialisation -- the theory constrains the
+    *output* of SWAP, not where it starts -- but it is the standard choice and it makes the
+    algorithm deterministic when no restarts are asked for.
+    """
+    medoids = [int(np.argmin(D.sum(axis=1)))]
+    while len(medoids) < K:
+        nearest = D[:, medoids].min(axis=1)               # (N,) current cost of each point
+        gain = np.maximum(nearest[:, None] - D, 0.0).sum(axis=0)   # gain[h], summed over i
+        gain[medoids] = -np.inf
+        medoids.append(int(np.argmax(gain)))
+    return np.array(medoids, dtype=np.int64)
 
-    * PAM's BUILD, deterministic: start from the medoid minimising the total dissimilarity,
-      then repeatedly add the point that reduces Phi the most;
-    * alternating refinement: assign every point to its nearest medoid, then replace each
-      medoid by the member of its cluster minimising the within-cluster sum of
-      dissimilarities, until the medoid set is stable.
 
-    `n_restarts - 1` further runs start from random medoid sets and the lowest Phi wins, which
-    is what `rng` is for. Checked against the global optimum by enumeration wherever that was
-    affordable: on this project's mixtures the heuristic reached it every time at N = 40,
-    K <= 4.
+def _swap_table(D, medoids):
+    """(table, current): N*Phi after every one-medoid swap, and N*Phi as it stands.
+
+    `table[j, h]` is N*Phi of the medoid set with `medoids[j]` replaced by `h`, for every
+    h at once -- including the h that are themselves medoids, which the caller masks out.
+
+    Recomputing Phi from scratch for each of the K(N-K) candidate swaps would make a sweep
+    O(K^2 N^2). The bookkeeping below brings it to O(K N^2): removing medoid j changes
+    nothing for the points it does not currently serve, and the points it does serve fall
+    back on their second nearest medoid. So the cost of point i once j is gone and h is in
+    is min(base_j[i], D[i, h]), with base_j[i] the fallback distance -- and the whole row
+    of the table is one min-reduction of an (N, N) array.
+    """
+    N = D.shape[0]
+    Dm = D[:, medoids]                                    # (N, K)
+    K = Dm.shape[1]
+    order = np.argsort(Dm, axis=1, kind="stable")
+    rows = np.arange(N)
+    assign = order[:, 0]                                  # index *within* `medoids`
+    nearest = Dm[rows, assign]
+    second = Dm[rows, order[:, 1]] if K >= 2 else np.full(N, np.inf)
+
+    table = np.empty((K, N), dtype=float)
+    for j in range(K):
+        base = np.where(assign == j, second, nearest)
+        table[j] = np.minimum(base[:, None], D).sum(axis=0)
+    return table, float(nearest.sum())
+
+
+def _best_swap(D, medoids):
+    """Steepest one-medoid swap: (j, h, delta), delta = N*(Phi_new - Phi_current).
+
+    `delta >= 0` means no swap strictly improves Phi, i.e. the medoid set is one-swap
+    stationary. When K = N there is no non-medoid to swap in and delta is +inf.
+    """
+    table, current = _swap_table(D, medoids)
+    table[:, medoids] = np.inf                            # h must be a non-medoid
+    flat = int(np.argmin(table))
+    j, h = flat // table.shape[1], flat % table.shape[1]
+    return int(j), int(h), float(table[j, h] - current)
+
+
+def pam_certify_one_swap(D, medoids, tol=0.0):
+    """True iff no single medoid/non-medoid swap strictly decreases Phi.
+
+    The exhaustive check the theory needs. Theorem 3.8 is not about a global minimiser of
+    Phi -- that would need the C(N, K) medoid sets enumerated, C(800, 4) being 1.7e10 --
+    but about a set on which no improving one-swap exists, which is exactly what
+    Lemma 3.7 then turns into "one medoid per cluster". A run that stopped on an iteration
+    cap rather than on exhaustion has not established that, so it is worth certifying
+    separately from the loop that produced it.
+    """
+    D = np.asarray(D, dtype=float)
+    medoids = np.asarray(medoids, dtype=np.int64)
+    if medoids.size >= D.shape[0]:
+        return True                                       # no non-medoid to swap in
+    return _best_swap(D, medoids)[2] >= -tol
+
+
+@dataclass(frozen=True)
+class PAMResult:
+    """Output of `pam`, with what is needed to certify it against the theory."""
+
+    labels: np.ndarray          # (N,) nearest-medoid partition
+    medoids: np.ndarray         # (K,) indices
+    objective: float            # Phi, normalised by N
+    one_swap_certified: bool    # no improving one-swap exists at the returned medoids
+    n_swaps: int                # swaps accepted by the winning run
+    hit_cap: bool               # a run stopped on `max_swaps` rather than on exhaustion
+
+
+def pam(D, K, rng=None, n_restarts=1, max_swaps=10_000, tol=0.0):
+    """Partitioning Around Medoids on a precomputed dissimilarity matrix.
+
+    This is the algorithm Theorem 3.8 analyses, and not an approximation of it: BUILD, then
+    *strictly improving one-medoid swaps* until no improving swap exists. The alternating
+    "assign, then re-centre each cluster" heuristic often called K-medoids is a different
+    algorithm; its fixed points need not be one-swap stationary, so the theorem does not
+    apply to them.
+
+    Each sweep takes the *steepest* improving swap. Taking the first improving one instead
+    would also terminate at a one-swap stationary set -- the theory covers either -- but
+    steepest descent makes the run deterministic given its starting point.
+
+    `n_restarts` beyond the first starts from random medoid sets (hence `rng`) and the
+    lowest Phi wins. This departs from BUILD-then-SWAP, but every candidate is run to
+    exhaustion, so the winner is one-swap stationary whatever it started from and the
+    theorem still applies. The default is a single deterministic run: the paper's PAM.
+
+    Phi cannot increase and there are finitely many medoid sets, so the loop terminates;
+    `max_swaps` only guards against a pathological tie-driven cycle, and `hit_cap` reports
+    whether it ever bound.
     """
     D = np.asarray(D, dtype=float)
     N = D.shape[0]
     if K < 1 or K > N:
-        raise ValueError("K must lie between 1 and N")
-    best = None
+        raise ValueError(f"K must lie between 1 and N = {N}, got {K}")
+    if n_restarts < 1:
+        raise ValueError("n_restarts must be >= 1")
+    if n_restarts > 1 and rng is None:
+        raise ValueError("rng is required when n_restarts > 1")
+
+    best, hit_cap = None, False
     for r in range(n_restarts):
-        if r == 0:
-            med = [int(np.argmin(D.sum(axis=1)))]
-            while len(med) < K:
-                gain = np.maximum(D[:, med].min(axis=1)[None, :] - D, 0.0).sum(axis=1)
-                gain[med] = -np.inf
-                med.append(int(np.argmax(gain)))
-            med = np.array(med, dtype=np.int64)
-        else:
-            med = rng.choice(N, size=K, replace=False)
-        for _ in range(max_iter):
-            labels = np.argmin(D[:, med], axis=1)
-            new = med.copy()
-            for k in range(K):
-                idx = np.flatnonzero(labels == k)
-                if idx.size:
-                    new[k] = idx[np.argmin(D[np.ix_(idx, idx)].sum(axis=1))]
-            if np.array_equal(np.sort(new), np.sort(med)):
+        medoids = _pam_build(D, K) if r == 0 else np.sort(rng.choice(N, size=K, replace=False))
+        swaps = 0
+        while swaps < max_swaps:
+            j, h, delta = _best_swap(D, medoids)
+            if delta >= -tol:
                 break
-            med = new
-        obj = kmedoids_objective(D, med)
-        if best is None or obj < best[2]:
-            best = (np.argmin(D[:, med], axis=1), med, obj)
-    return best
+            medoids = medoids.copy()
+            medoids[j] = h
+            swaps += 1
+        else:
+            hit_cap = True
+        objective = pam_objective(D, medoids)
+        if best is None or objective < best[0]:
+            best = (objective, medoids, swaps)
 
+    objective, medoids, swaps = best
+    return PAMResult(
+        labels=np.argmin(D[:, medoids], axis=1).astype(np.int64),
+        medoids=medoids,
+        objective=objective,
+        one_swap_certified=pam_certify_one_swap(D, medoids, tol=tol),
+        n_swaps=swaps,
+        hit_cap=hit_cap,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Agreement between partitions, and plug-in estimates of Gamma
+# Agreement between partitions
 # ---------------------------------------------------------------------------
+
+
+def exact_recovery(labels, truth):
+    """True iff the two labellings induce the *same partition*, labels aside.
+
+    The primary outcome of the paper: Theorems 3.5, 3.8 and 3.9 are statements about
+    P(partition = P*), not about a similarity score. Label values are meaningless -- every
+    estimator here numbers its blocks by order of appearance -- so the comparison is between
+    partitions, and no permutation has to be searched for: two labellings agree iff the
+    number of distinct (a_i, b_i) pairs equals the number of blocks on each side, which says
+    exactly that the map from one labelling to the other is a bijection.
+    """
+    a = np.asarray(labels).reshape(-1)
+    b = np.asarray(truth).reshape(-1)
+    if a.size != b.size:
+        raise ValueError(f"labellings have different lengths: {a.size} and {b.size}")
+    pairs = len(set(zip(a.tolist(), b.tolist())))
+    return pairs == len(set(a.tolist())) == len(set(b.tolist()))
 
 
 def adjusted_rand_index(a, b):
@@ -222,33 +353,3 @@ def adjusted_rand_index(a, b):
     if maximum == expected:              # both partitions trivial: they then coincide
         return 1.0
     return float((index - expected) / (maximum - expected))
-
-
-def gamma_block_means(D, labels, K):
-    """Plug-in estimate of Gamma from a dissimilarity matrix and the true labels.
-
-    Gamma_hat[k, l] is the average of hat-gamma_n(i, j) over the pairs with
-    (Z_i, Z_j) = (k, l), the diagonal of D being excluded from the within-class blocks.
-    Averaging over the |C_k|(|C_k|-1)/2 or |C_k||C_l| available pairs makes this far less
-    noisy than the two-realisations-per-component estimate of `assumptions.ipynb`, at no
-    extra cost once D is computed. Blocks with no available pair are NaN.
-    """
-    D = np.asarray(D, dtype=float)
-    labels = np.asarray(labels)
-    onehot = (labels[:, None] == np.arange(K)[None, :]).astype(float)
-    sums = onehot.T @ D @ onehot                      # diagonal of D is zero, so it drops out
-    counts = np.outer(onehot.sum(0), onehot.sum(0))
-    np.fill_diagonal(counts, onehot.sum(0) * (onehot.sum(0) - 1.0))
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return np.where(counts > 0, sums / np.maximum(counts, 1e-300), np.nan)
-
-
-def separation_levels(D, labels, K):
-    """Delta_in, Delta_out and Delta_out^max from the plug-in Gamma of `gamma_block_means`."""
-    G = gamma_block_means(D, labels, K)
-    offdiag = G[~np.eye(K, dtype=bool)]
-    if np.all(np.isnan(np.diag(G))) or np.all(np.isnan(offdiag)):
-        return {"in": np.nan, "out": np.nan, "out_max": np.nan}
-    return {"in": float(np.nanmax(np.diag(G))),
-            "out": float(np.nanmin(offdiag)),
-            "out_max": float(np.nanmax(offdiag))}
