@@ -59,3 +59,19 @@ python validation/check_pam.py    # no R needed; about a minute
 The check verifies the incremental swap bookkeeping against $\Phi$ recomputed from scratch,
 the normalisation of $\Phi$, one-swap stationarity of every output, and the edge cases; it
 also reports how often PAM reaches the global optimum where enumeration is affordable.
+
+## The Monte Carlo engine
+
+`experiments.py` holds the two-level machinery the refactored experiments run on: mixtures
+drawn once and held fixed, $\Gamma^{(n)}$ estimated from an independent sample, simultaneous
+intervals on its entries, and the finite-horizon separation verdict they induce on $\eta_n$.
+
+```bash
+python validation/check_experiments.py    # about three minutes
+```
+
+It checks stream reproducibility, the empirical coverage of the binomial and simultaneous
+intervals, the symmetry and coverage of $\hat\Gamma^{(n)}$, that the $\eta_n$ bounds bracket
+the point estimate and cover a high-precision reference, that a separated mixture is
+classified separated and a near-identical one is not, and that the tidy tables survive a
+round trip.

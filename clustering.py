@@ -9,7 +9,7 @@ Contents
 Hierarchical   : ``hac_labels`` (single, complete, average), ``single_linkage_tree``,
                  ``cut_at_k``
 PAM            : ``pam``, ``pam_objective``, ``pam_certify_one_swap``
-Selecting K    : ``profile_distances``, ``profile_graph_k``
+Selecting K    : ``profile_graph_k``, ``profile_distances``, ``profile_threshold``
 Scoring        : ``exact_recovery`` (the primary outcome), ``adjusted_rand_index``
 
 Two estimators the paper states are implemented here in the form it states them: the
@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.cluster.hierarchy import linkage as scipy_linkage
+from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import squareform
 
@@ -141,6 +142,92 @@ def hac_labels(D, K, method="average"):
     Z = scipy_linkage(squareform(D, checks=False), method=method)
     return _cut_scipy_tree(Z, N, K)
 
+
+
+# ---------------------------------------------------------------------------
+# Selecting K: the profile graph of Theorem 3.9
+# ---------------------------------------------------------------------------
+
+
+@njit(cache=True, parallel=True)
+def _profile_distances(D):
+    N = D.shape[0]
+    out = np.zeros((N, N), dtype=np.float64)
+    for i in prange(N):
+        for j in range(i + 1, N):
+            best = 0.0
+            for l in range(N):
+                if l == i or l == j:
+                    continue
+                v = D[i, l] - D[j, l]
+                if v < 0.0:
+                    v = -v
+                if v > best:
+                    best = v
+            out[i, j] = best
+            out[j, i] = best
+    return out
+
+
+def profile_distances(D):
+    """rho(i, j) = max over l not in {i, j} of |gamma_hat(i, l) - gamma_hat(j, l)|.
+
+    How differently i and j see the rest of the sample. Two sequences of the same component
+    have the same finite-horizon mean against every third sequence, so their profiles differ
+    only by the fluctuation of gamma_hat; two sequences of different components differ by at
+    least eta against any third one drawn from either of their components. That gap, not the
+    dissimilarity between i and j themselves, is what separates the two cases -- which is why
+    the rule needs no dendrogram and no candidate value of K.
+
+    O(N^3), parallel over i. At N = 800 that is 5e8 inner steps, under a second.
+    """
+    return _profile_distances(np.ascontiguousarray(D, dtype=np.float64))
+
+
+def profile_threshold(N, n, M):
+    """a_{N,n} = M (log N / n)^{1/4}, equation (8).
+
+    M is the largest substitution cost -- `check_assumption_metric(...)["M = max c_sub"]`,
+    or M^mc for multichannel costs. The exponent 1/4 is what makes the threshold sit
+    strictly between the two scales it must separate: it goes to 0, so it eventually falls
+    below eta, while n a_{N,n}^2 / log N -> infinity, so the uniform concentration still
+    covers it.
+    """
+    if N < 2 or n < 1:
+        raise ValueError("need N >= 2 and n >= 1")
+    return float(M) * (np.log(N) / n) ** 0.25
+
+
+def profile_graph_k(D, n, M, threshold=None, return_labels=False):
+    """Estimate K as the number of connected components of H_{N,n}, Theorem 3.9.
+
+    i and j are adjacent when rho(i, j) <= a_{N,n}. On the concentration event the graph has
+    an edge exactly between same-component pairs, so its components *are* the true clusters:
+    the rule returns a partition as well as a count, and `return_labels` hands it back. That
+    partition is not what the paper cuts a dendrogram to -- Remark 3.10 estimates K here and
+    then runs single linkage or PAM at K_hat -- but it is free, and disagreement between the
+    two is a useful diagnostic.
+
+    `threshold` overrides a_{N,n}. The theorem fixes the threshold up to the constant M, and
+    that constant is what makes it unusable at feasible horizons: with the default scheme
+    M = 2, a_{N,n} is 0.54 at N = 200, n = 1000, while the profile distances it has to
+    separate sit at 0.04 within a component and 0.44 between -- so the threshold lands above
+    *both* and joins everything into one component. The mechanism is sound and the gap is
+    wide; only the scale is wrong, and it closes like n^(-1/4), so an eta of 0.3 would need
+    n > 50000. Pass an explicit threshold to run the rule at a calibrated scale, and say so:
+    that is outside the constants the theorem fixes.
+
+    Meaningful only for N >= 3: with N = 2 there is no third sequence to profile against,
+    every rho is an empty maximum, and the two points are always joined.
+    """
+    D = np.asarray(D, dtype=float)
+    N = D.shape[0]
+    if threshold is None:
+        threshold = profile_threshold(N, n, M)
+    adjacency = profile_distances(D) <= threshold
+    np.fill_diagonal(adjacency, False)
+    k_hat, labels = connected_components(csr_matrix(adjacency), directed=False)
+    return (int(k_hat), labels.astype(np.int64)) if return_labels else int(k_hat)
 
 
 # ---------------------------------------------------------------------------
