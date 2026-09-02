@@ -9,7 +9,8 @@ Contents
 Hierarchical   : ``hac_labels`` (single, complete, average), ``single_linkage_tree``,
                  ``cut_at_k``
 PAM            : ``pam``, ``pam_objective``, ``pam_certify_one_swap``
-Selecting K    : ``profile_graph_k``, ``profile_distances``, ``profile_threshold``
+Selecting K    : ``profile_graph_k`` cuts; ``profile_threshold`` (Theorem 3.9),
+                 ``geomean_threshold`` and ``ratio_threshold`` (no constant) choose where
 Scoring        : ``exact_recovery`` (the primary outcome), ``adjusted_rand_index``
 
 Two estimators the paper states are implemented here in the form it states them: the
@@ -198,7 +199,7 @@ def profile_threshold(N, n, M):
     return float(M) * (np.log(N) / n) ** 0.25
 
 
-def profile_graph_k(D, n, M, threshold=None, return_labels=False):
+def profile_graph_k(D, n=None, M=None, threshold=None, rho=None, return_labels=False):
     """Estimate K as the number of connected components of H_{N,n}, Theorem 3.9.
 
     i and j are adjacent when rho(i, j) <= a_{N,n}. On the concentration event the graph has
@@ -220,14 +221,79 @@ def profile_graph_k(D, n, M, threshold=None, return_labels=False):
     Meaningful only for N >= 3: with N = 2 there is no third sequence to profile against,
     every rho is an empty maximum, and the two points are always joined.
     """
-    D = np.asarray(D, dtype=float)
-    N = D.shape[0]
+    if rho is None:
+        rho = profile_distances(np.asarray(D, dtype=float))
+    N = rho.shape[0]
     if threshold is None:
+        if n is None or M is None:
+            raise ValueError("give either an explicit threshold, or both n and M")
         threshold = profile_threshold(N, n, M)
-    adjacency = profile_distances(D) <= threshold
+    adjacency = rho <= threshold
     np.fill_diagonal(adjacency, False)
     k_hat, labels = connected_components(csr_matrix(adjacency), directed=False)
     return (int(k_hat), labels.astype(np.int64)) if return_labels else int(k_hat)
+
+
+def profile_heights(rho):
+    """Single-linkage merge heights of the profile distances, h_1 <= ... <= h_{N-1}.
+
+    Equivalently the sorted edge weights of a minimum spanning tree: h_l is the threshold at
+    which the l-th merge happens, so the graph at threshold t has N - #{l : h_l <= t}
+    components. Every rule below is a choice of where to cut this sequence.
+    """
+    rho = np.asarray(rho, dtype=float)
+    if rho.shape[0] < 2:
+        return np.empty(0)
+    return scipy_linkage(squareform(rho, checks=False), method="single")[:, 2]
+
+
+def geomean_threshold(rho, heights=None):
+    """sqrt(h_median * h_max): a threshold with no constant in it at all.
+
+    Assume K >= 2 and min_k |C_k| >= 2, so that K <= N/2. On the concentration event the
+    merge heights split in two: the first N-K are within-component and bounded by 2 eps,
+    the last K-1 are between-component and bounded below by eta - 2r_n - 2 eps. The median
+    then lies in the first group and the maximum in the second, so their geometric mean is
+    trapped between the two scales:
+
+        sqrt(h_med * h_max) <= sqrt(2 eps M)  ->  below eta as soon as 2 eps M < eta^2,
+        sqrt(h_med * h_max) >= sqrt(h_med * (eta - ...))  ->  above 2 eps as soon as
+                                                             h_med >> eps^2.
+
+    The upper side needs no assumption beyond eps -> 0. The lower side needs the median
+    within-component distance to dominate eps^2, which is weaker by a factor sqrt(n) than
+    the bound `ratio_threshold` needs -- and that is the reason to prefer this rule.
+
+    Requires K >= 2: with a single component every height is within-component, the maximum
+    is no longer of order eta, and the geometric mean lands inside the bulk it should sit
+    above.
+    """
+    if heights is None:
+        heights = profile_heights(rho)
+    if heights.size < 2:
+        return 0.0
+    return float(np.sqrt(heights[heights.size // 2] * heights[-1]))
+
+
+def ratio_threshold(rho, heights=None, floor=0):
+    """Cut just below the largest *multiplicative* jump in the merge heights.
+
+    The within-component heights are of order eps -> 0 and the between-component ones of
+    order eta, so the ratio across the boundary diverges while ratios inside either group
+    stay bounded. Additive gaps do not work: the between-component heights concentrate on at
+    most K(K-1)/2 values max_q |Gamma_kq - Gamma_lq|, and the holes between those can be
+    wider than the hole that matters.
+
+    `floor` restricts the search to l > floor. Measured on this project's mixtures the
+    restriction changes nothing -- the spurious jumps are not at the bottom of the bulk --
+    so it is left at 0 and kept only because the proof is easier to write with it.
+    """
+    if heights is None:
+        heights = profile_heights(rho)
+    if heights.size < 2:
+        return 0.0
+    ratios = heights[floor + 1:] / np.maximum(heights[floor:-1], 1e-15)
+    return float(heights[floor + int(np.argmax(ratios))])
 
 
 # ---------------------------------------------------------------------------
