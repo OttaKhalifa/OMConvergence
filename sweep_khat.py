@@ -32,8 +32,9 @@ import numpy as np
 from clustering import (asw_select_k, exact_recovery, geomean_threshold,
                         profile_distances, profile_graph_k, profile_heights,
                         profile_threshold, safeguard_threshold)
-from experiments import (ResultsWriter, draw_markov_mixture, estimate_gamma_paths, eta_rows,
-                         save_mixture, seed_key, stream, univariate_om)
+from experiments import (ResultsWriter, draw_hmm_mixture, draw_markov_mixture,
+                         estimate_gamma_paths, eta_rows, multichannel_om, save_mixture,
+                         seed_key, stream, univariate_om)
 
 SEED = 20260901
 ALPHAS = (0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 5.0, 10.0)     # the grid of the published figures
@@ -77,6 +78,31 @@ def evaluate_rules(D, rho, heights, N, n, M, with_asw):
     return out
 
 
+# --- the mechanism the sweep runs on ----------------------------------------
+#
+# Markov chains index difficulty by the Dirichlet concentration alpha. HMMs have no such
+# knob, so the same axis becomes the emission concentration alpha_B, read the same way.
+# The rules for K read only rho, which reads only the dissimilarity matrix, so none of them
+# knows which mechanism produced it.
+
+HMM_STATES = 4
+HMM_VARS = 5
+HMM_CATEGORIES = [5] * 5
+
+
+def build_om(kind, cost="constant"):
+    if kind == "markov":
+        return univariate_om(cost, D_STATES)
+    return multichannel_om(cost, HMM_CATEGORIES, sub=2.0, indel=1.0)
+
+
+def build_mixture(kind, K, alpha, mixture_id, seed):
+    if kind == "markov":
+        return draw_markov_mixture(K, D_STATES, alpha, mixture_id, seed)
+    return draw_hmm_mixture(K, HMM_STATES, HMM_VARS, HMM_CATEGORIES, mixture_id, seed,
+                            alpha_A=0.5, alpha_B=alpha)
+
+
 def done_mixtures(path):
     """Mixtures already written, so a killed run resumes instead of restarting."""
     if not Path(path).exists():
@@ -94,6 +120,10 @@ def main():
     parser.add_argument("--horizons", type=int, nargs="+", default=[400, 1000])
     parser.add_argument("--N", type=int, default=200)
     parser.add_argument("--out", default="results")
+    parser.add_argument("--mechanism", default="markov", choices=("markov", "hmm"),
+                        help="markov: mixtures of first-order chains. hmm: mixtures of "
+                             "homogeneous multichannel HMMs, five channels of five "
+                             "letters, with alpha read as alpha_B")
     parser.add_argument("--tag", default="", help="suffix for the output files")
     parser.add_argument("--asw", action="store_true",
                         help="also run the applied default, K by maximal silhouette width")
@@ -102,7 +132,7 @@ def main():
     args = parser.parse_args()
 
     n_grid = np.asarray(sorted(args.horizons), dtype=np.int64)
-    om = univariate_om("constant", D_STATES)
+    om = build_om(args.mechanism)
     out = Path(args.out)
     suffix = f"_{args.tag}" if args.tag else ""
     grid_path = out / f"khat_grid{suffix}.csv"
@@ -128,7 +158,7 @@ def main():
                 finished += 1
                 if (float(alpha), int(K), m) in already:
                     continue
-                mixture = draw_markov_mixture(K, D_STATES, alpha, m, SEED)
+                mixture = build_mixture(args.mechanism, K, alpha, m, SEED)
                 save_mixture(mixture, out / "mixtures")
 
                 estimate = estimate_gamma_paths(mixture, om, n_grid, args.n_gamma,
@@ -148,7 +178,7 @@ def main():
                                 matrices[g], rho, heights, args.N, int(n), om.M, args.asw):
                             rows.append({
                                 "alpha": alpha, "K": K, "mixture_id": m, "dataset_id": r,
-                                "n": int(n), "N": args.N, "d": D_STATES,
+                                "n": int(n), "N": args.N, "d": mixture.d,
                                 "cost_scheme": om.name, "rule": name,
                                 "threshold": threshold, "k_hat": k_hat,
                                 "k_correct": int(k_hat == K),
