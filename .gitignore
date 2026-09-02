@@ -13,3 +13,6 @@ validation/reference.json
 # produced by sweep_khat.py; aggregates are committed, raw tables and kernels are not
 results/mixtures/
 results_sweep.log
+
+# run logs
+results_*.log

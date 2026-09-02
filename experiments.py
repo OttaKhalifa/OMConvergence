@@ -55,7 +55,8 @@ import numpy as np
 from scipy.stats import norm, t
 
 from clustering import (adjusted_rand_index, exact_recovery, hac_labels, pam,
-                        profile_graph_k)
+                        profile_graph_k, profile_heights, profile_distances,
+                        safeguard_threshold)
 from generators import sample_markov_model, sample_mixture
 from om import check_assumption_metric, cost_scheme, gamma_hat_paths, om_matrices
 
@@ -375,7 +376,12 @@ def run_dataset(mixture, om, N, n_grid, rng, dataset_id, algorithms=ALGORITHMS,
     rows = []
     for g, n in enumerate(n_grid):
         D = matrices[g]
-        k_hat = profile_graph_k(D, int(n), om.M)
+        # The safeguarded rule, not the threshold of the current Theorem 3.9: the latter
+        # returns K_hat = 1 at every horizon these experiments can reach.
+        rho = profile_distances(D)
+        k_hat = profile_graph_k(None, rho=rho,
+                                threshold=safeguard_threshold(rho, int(n),
+                                                              profile_heights(rho)))
         for algorithm in algorithms:
             labels = labels_at_k(D, mixture.K, algorithm, rng=rng, pam_restarts=pam_restarts)
             at_k_hat = labels_at_k(D, k_hat, algorithm, rng=rng, pam_restarts=pam_restarts)
