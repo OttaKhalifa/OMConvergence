@@ -10,7 +10,8 @@ Hierarchical   : ``hac_labels`` (single, complete, average), ``single_linkage_tr
                  ``cut_at_k``
 PAM            : ``pam``, ``pam_objective``, ``pam_certify_one_swap``
 Selecting K    : ``profile_graph_k`` cuts; ``profile_threshold`` (Theorem 3.9),
-                 ``geomean_threshold`` and ``ratio_threshold`` (no constant) choose where
+                 ``geomean_threshold``, ``safeguard_threshold``
+                 and ``ratio_threshold`` (no constant) choose where
 Selecting K, applied : ``asw_select_k``, ``average_silhouette``, ``silhouette_widths``
 Scoring        : ``exact_recovery`` (the primary outcome), ``adjusted_rand_index``
 
@@ -248,6 +249,11 @@ def profile_heights(rho):
     return scipy_linkage(squareform(rho, checks=False), method="single")[:, 2]
 
 
+def _median_height_index(n_heights):
+    """m_N - 1, with m_N = ceil((N-1)/2) as in the statement; heights are h_1 ... h_{N-1}."""
+    return -(-n_heights // 2) - 1
+
+
 def geomean_threshold(rho, heights=None):
     """sqrt(h_median * h_max): a threshold with no constant in it at all.
 
@@ -273,7 +279,39 @@ def geomean_threshold(rho, heights=None):
         heights = profile_heights(rho)
     if heights.size < 2:
         return 0.0
-    return float(np.sqrt(heights[heights.size // 2] * heights[-1]))
+    return float(np.sqrt(heights[_median_height_index(heights.size)] * heights[-1]))
+
+
+def safeguard_threshold(rho, n, heights=None):
+    """max{ sqrt(h_med h_max),  h_max (log N / n)^(1/4) }: the geometric mean, floored.
+
+        a_{N,n} = max{ sqrt(h_med h_max),  h_max (log N / n)^(1/4) }
+
+    The second term is what makes the rule provable without an anti-concentration argument.
+    The pure geometric mean needs h_med to dominate eps^2 from below, and nothing in the
+    concentration machinery bounds a merge height from below. The safeguard sidesteps that:
+    it does not read h_med at all, and since K >= 2 forces h_max >= beta, it is eventually
+    above every within-component profile distance, while (log N / n)^(1/4) -> 0 keeps it
+    below beta. The lower bound on the threshold is then deterministic.
+
+    Note what the exponent multiplies. The stated threshold of Theorem 3.9 is
+    M (log N / n)^(1/4) with M = max c_sub, a bound on increments that has no reason to be
+    the scale of a threshold -- at N = 200, n = 1000 it evaluates to 0.54, above every
+    profile distance in sight. Here the same vanishing factor multiplies the *observed*
+    h_max, which is of order eta. The exponent was never the problem; the constant was.
+
+    When the geometric mean already exceeds the safeguard, the rule is exactly
+    `geomean_threshold`, so the floor only binds where h_med has collapsed -- which is the
+    regime where the pure rule over-splits.
+    """
+    if heights is None:
+        heights = profile_heights(rho)
+    if heights.size < 2:
+        return 0.0
+    N = heights.size + 1
+    h_max = float(heights[-1])
+    geometric = float(np.sqrt(heights[_median_height_index(heights.size)] * h_max))
+    return max(geometric, h_max * (np.log(N) / n) ** 0.25)
 
 
 def ratio_threshold(rho, heights=None, floor=0):

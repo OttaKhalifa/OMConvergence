@@ -4,13 +4,13 @@
 
 Compares, on the same dissimilarity matrices:
 
-  stated      the threshold of Theorem 3.9, a_{N,n} = M (log N / n)^(1/4)
-  geomean     sqrt(h_median * h_max) of the profile merge heights, no constant
-  ratio       the largest multiplicative jump in those heights, no constant
-  ratio-half  the same restricted to l >= ceil(N/2)
+  stated      the threshold of the current Theorem 3.9, M (log N / n)^(1/4)
+  safeguard   the proposed replacement, max{sqrt(h_med h_max), h_max (log N / n)^(1/4)}
+  asw-pam     K by maximal average silhouette width over PAM, the applied default
+  asw-average the same over average linkage
+  geomean     sqrt(h_med h_max) alone, carried as a diagnostic of what the floor costs
 
-The rules read only the dissimilarity matrix, and cost under 1% of the sweep -- all four are
-evaluated on every matrix, so comparing them is free once one of them is measured.
+The profile rules cost under 1% of the sweep, so carrying the diagnostic is free.
 
 eta_n is estimated separately, on an independent Monte Carlo sample, and stored alongside:
 the point of the grid is to relate K_hat to the finite-horizon geometry, not merely to
@@ -31,7 +31,7 @@ import numpy as np
 
 from clustering import (asw_select_k, exact_recovery, geomean_threshold,
                         profile_distances, profile_graph_k, profile_heights,
-                        profile_threshold, ratio_threshold)
+                        profile_threshold, safeguard_threshold)
 from experiments import (ResultsWriter, draw_markov_mixture, estimate_gamma_paths, eta_rows,
                          save_mixture, seed_key, stream, univariate_om)
 
@@ -51,16 +51,21 @@ ETA_FIELDS = ["alpha", "K", "mixture_id", "n", "cost_scheme", "eta_hat", "eta_ci
 def evaluate_rules(D, rho, heights, N, n, M, with_asw):
     """(name, threshold, k_hat, labels) for every rule, on one dissimilarity matrix.
 
-    The four profile rules differ only in where they cut the same rho, so they share one
-    O(N^3) profile computation. The ASW rules do not read rho at all: they cluster at every
-    k and score the result, which is why they cost an order of magnitude more.
+    Three rules have a status and are reported as such: `stated` is the threshold of the
+    current Theorem 3.9, `safeguard` is the proposed replacement, and the ASW rules are the
+    applied default. `geomean` is carried only as a diagnostic -- `safeguard` is exactly
+    `geomean` whenever the floor does not bind, so the pair measures what the floor costs.
+    Variants without a consistency proof are deliberately not run: the comparison the paper
+    makes is a consistent rule against the one practice uses, not a search over heuristics.
+
+    The profile rules differ only in where they cut the same rho, so they share one O(N^3)
+    profile computation. The ASW rules do not read rho at all: they cluster at every k and
+    score the result, which is why they cost an order of magnitude more.
     """
-    half = (N + 1) // 2 - 1
     out = []
     for name, threshold in (("stated", profile_threshold(N, n, M)),
                             ("geomean", geomean_threshold(rho, heights)),
-                            ("ratio", ratio_threshold(rho, heights)),
-                            ("ratio-half", ratio_threshold(rho, heights, floor=half))):
+                            ("safeguard", safeguard_threshold(rho, n, heights))):
         k_hat, labels = profile_graph_k(None, rho=rho, threshold=threshold,
                                         return_labels=True)
         out.append((name, threshold, k_hat, labels))
