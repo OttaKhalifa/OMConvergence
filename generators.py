@@ -22,6 +22,7 @@ Markov chains              : ``sample_markov_model``, ``sample_chain_order1``,
                              ``stationary_distribution_markov``, ``spectral_gap``
 Mixtures of Markov chains  : ``sample_mixture``
 Hidden Markov models       : ``HMMComponent``, ``MixtureOfHMMGenerator``
+                             (``sample_dataset``, ``sample_component``)
 """
 
 from __future__ import annotations
@@ -418,6 +419,35 @@ class MixtureOfHMMGenerator:
 
         X_out[idx] = X_k
         Z_out[idx] = z
+
+    def sample_component(self, k, n_sequences, seq_len, rng=None):
+        """`n_sequences` trajectories of component k alone, as an (R, T, V) int8 array.
+
+        `sample_dataset` draws the component labels; this bypasses them. Estimating
+        Gamma^(n)_kl needs trajectories of a *named* pair of components, on an independent
+        sample, which the labelled dataset cannot provide without wasting most of it.
+
+        Passing `rng` runs the draw on that stream and leaves the generator's own untouched,
+        so parameters stay fixed while the data varies.
+        """
+        if not 0 <= k < self.K:
+            raise ValueError(f"component index must lie in [0, {self.K}), got {k}")
+        T = int(seq_len)
+        if T <= 0:
+            raise ValueError("seq_len must be > 0")
+        if n_sequences <= 0:
+            raise ValueError("n_sequences must be > 0")
+
+        saved = self.rng
+        if rng is not None:
+            self.rng = rng
+        try:
+            X = np.empty((n_sequences, T, self.V), dtype=np.int8)
+            Z = np.empty((n_sequences, T), dtype=np.int8)
+            self._sample_batch(np.arange(n_sequences), self.components[k], T, X, Z)
+        finally:
+            self.rng = saved
+        return X
 
     def params_summary(self) -> Dict[str, Any]:
         return {

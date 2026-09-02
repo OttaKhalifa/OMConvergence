@@ -24,7 +24,9 @@ Cost schemes and Assumption 1 : ``cost_scheme``, ``check_assumption_metric``,
                                 ``compute_trate_subst_matrix``
 OM dissimilarity (univariate) : ``om_distance``, ``gamma_hat_pairs``, ``gamma_hat_paths``,
                                 ``om_matrices``
-OM dissimilarity (multichannel) : ``om_trate_distances``, ``OMResult``
+OM dissimilarity (multichannel) : ``multichannel_cost_scheme``,
+                                ``om_multichannel_paths``, ``om_multichannel_matrices``,
+                                ``om_trate_distances``, ``OMResult``
 Bounds of Proposition 2.8     : ``wasserstein_lower_bound``, ``product_upper_bound``
 """
 
@@ -456,6 +458,11 @@ def _om_pair(sequence_a, sequence_b, substitution_costs, indel):
     Common prefixes and suffixes are skipped, borders use multiplication, and
     equal multichannel states bypass the zero-cost addition. These details are
     required for bit identity, not merely numerical proximity.
+
+    Two rows rather than the full table. The values are the same, so the bits are
+    unaffected; the memory is not. A full (n+1) x (m+1) table costs 8 MB per pair at
+    n = 1000 and 32 MB at n = 2000, and every thread holds one, which is what put a
+    ceiling on the horizons this path could reach.
     """
     length_a, n_channels = sequence_a.shape
     length_b = sequence_b.shape[0]
@@ -484,21 +491,21 @@ def _om_pair(sequence_a, sequence_b, substitution_costs, indel):
         end_b -= 1
 
     rows, columns = end_a - prefix, end_b - prefix
-    matrix = np.empty((rows + 1, columns + 1), dtype=np.float64)
-    matrix[0, 0] = 0.0
-    for i in range(1, rows + 1):
-        matrix[i, 0] = i * indel
+    previous = np.empty(columns + 1, dtype=np.float64)
+    current = np.empty(columns + 1, dtype=np.float64)
+    previous[0] = 0.0
     for j in range(1, columns + 1):
-        matrix[0, j] = j * indel
+        previous[j] = j * indel
 
     for i in range(1, rows + 1):
         index_a = prefix + i - 1
+        current[0] = i * indel
         for j in range(1, columns + 1):
             index_b = prefix + j - 1
 
-            best_indel = matrix[i, j - 1]
-            if matrix[i - 1, j] < best_indel:
-                best_indel = matrix[i - 1, j]
+            best_indel = current[j - 1]
+            if previous[j] < best_indel:
+                best_indel = previous[j]
             best_indel += indel
 
             same = True
@@ -507,7 +514,7 @@ def _om_pair(sequence_a, sequence_b, substitution_costs, indel):
                     same = False
                     break
             if same:
-                substitution = matrix[i - 1, j - 1]
+                substitution = previous[j - 1]
             else:
                 cost = 0.0
                 for channel in range(n_channels):
@@ -516,9 +523,11 @@ def _om_pair(sequence_a, sequence_b, substitution_costs, indel):
                         sequence_a[index_a, channel],
                         sequence_b[index_b, channel],
                     ]
-                substitution = matrix[i - 1, j - 1] + cost
-            matrix[i, j] = substitution if substitution < best_indel else best_indel
-    return matrix[rows, columns]
+                substitution = previous[j - 1] + cost
+            current[j] = substitution if substitution < best_indel else best_indel
+        for j in range(columns + 1):
+            previous[j] = current[j]
+    return previous[columns]
 
 
 @njit(cache=True, parallel=True)
@@ -576,6 +585,107 @@ def om_trate_distances(
         indel=indel,
         lengths=lengths,
     )
+
+def multichannel_cost_scheme(name, n_categories, sub=2.0, indel=1.0, rng=None,
+                             low=1.2, high=2.0, weights=None):
+    """Per-channel (S_c, delta_c), aggregated as in Definition 4.1.
+
+    The multichannel costs of the paper are
+    ``c_sub(a, b) = sum_c lambda_c c_sub^(c)(a_c, b_c)`` and
+    ``delta(a) = sum_c lambda_c delta^(c)(a_c)``, and Assumption 1 is stable under that
+    aggregation: if every channel satisfies (i)-(vi), so does the sum. `weights` are the
+    lambda_c, unit by default.
+
+    Unlike `om_trate_distances`, the costs here are *fixed in advance* rather than estimated
+    from the data. That is what an independent Monte Carlo estimate of Gamma^(n) needs: a
+    cost scheme derived from the sample would make the dissimilarity depend on which
+    sequences happened to be drawn.
+
+    Returns ``(packed_costs, indel, M, channel_deltas)`` with `packed_costs` of shape
+    (V, C_max, C_max), the layout the kernels read, `indel` the aggregated gap cost, `M` the
+    aggregated maximum substitution cost -- ``M^mc`` in the paper, the constant of the
+    profile threshold -- and the per-channel gap costs, which is what Assumption 1 has to be
+    checked against: the product alphabet has prod_c C_c letters, 3125 for five channels of
+    five, and the triangle inequality on it is a 3125^3 table. Checking the channels instead
+    is not a shortcut but the right object, since the aggregation preserves conditions
+    (i)-(vi).
+    """
+    categories = tuple(int(c) for c in n_categories)
+    if not categories or any(c < 2 for c in categories):
+        raise ValueError("every channel needs at least 2 categories")
+    lam = np.ones(len(categories)) if weights is None else np.asarray(weights, dtype=float)
+    if lam.shape != (len(categories),) or np.any(lam <= 0):
+        raise ValueError("weights must be one positive number per channel")
+
+    per_channel = []
+    for c, count in enumerate(categories):
+        if name == "constant":
+            S = compute_constant_subst_matrix(count, cost=sub)
+        elif name == "random":
+            S = compute_random_subst_matrix(count, rng, low=low, high=high)
+        else:
+            raise ValueError(f"unknown multichannel cost scheme: {name!r}; TRATE costs are "
+                             f"data-driven, use om_trate_distances for those")
+        per_channel.append(lam[c] * S)
+
+    max_categories = max(categories)
+    packed = np.zeros((len(categories), max_categories, max_categories), dtype=np.float64)
+    for c, S in enumerate(per_channel):
+        packed[c, :S.shape[0], :S.shape[0]] = S
+    return (packed, float(np.sum(lam) * indel),
+            float(sum(S.max() for S in per_channel)), lam * float(indel))
+
+
+@njit(cache=True, parallel=True)
+def _om_mc_paths(X, Y, grid, substitution_costs, indel):
+    """d_OM(X[r, :n], Y[r, :n]) / n for every replicate and horizon, in parallel."""
+    R = X.shape[0]
+    G = grid.shape[0]
+    out = np.empty((R, G), dtype=np.float64)
+    for r in prange(R):
+        for g in range(G):
+            n = grid[g]
+            out[r, g] = _om_pair(X[r, :n], Y[r, :n], substitution_costs, indel) / n
+    return out
+
+
+@njit(cache=True, parallel=True)
+def _om_mc_matrix_kernel(X, grid, ii, jj, substitution_costs, indel, out):
+    """Fill out[g, i, j] = d_OM(X[i, :n], X[j, :n]) / n over the nested prefixes."""
+    for p in prange(ii.shape[0]):
+        i = ii[p]
+        j = jj[p]
+        for g in range(grid.shape[0]):
+            n = grid[g]
+            v = _om_pair(X[i, :n], X[j, :n], substitution_costs, indel) / n
+            out[g, i, j] = v
+            out[g, j, i] = v
+
+
+def om_multichannel_paths(X, Y, grid, substitution_costs, indel):
+    """(R, G) normalised dissimilarities between aligned multichannel trajectories.
+
+    X, Y are (R, n_max, V) integer arrays. The normalisation is by n, the paper's
+    hat-gamma_n, not the ``maxlength`` of the TraMineR benchmark: the two differ by the
+    factor `indel`, and it is the former the theory is about.
+    """
+    X = np.ascontiguousarray(X, dtype=np.int64)
+    Y = np.ascontiguousarray(Y, dtype=np.int64)
+    return _om_mc_paths(X, Y, np.asarray(grid, dtype=np.int64), substitution_costs, indel)
+
+
+def om_multichannel_matrices(X, grid, substitution_costs, indel):
+    """(G, N, N) dissimilarity matrices of one multichannel dataset, on nested prefixes."""
+    X = np.ascontiguousarray(X, dtype=np.int64)
+    grid = np.atleast_1d(np.asarray(grid, dtype=np.int64))
+    if grid[-1] > X.shape[1]:
+        raise ValueError("the largest horizon exceeds the length of the sequences")
+    ii, jj = np.triu_indices(X.shape[0], k=1)
+    out = np.zeros((grid.size, X.shape[0], X.shape[0]), dtype=np.float64)
+    _om_mc_matrix_kernel(X, grid, ii.astype(np.int64), jj.astype(np.int64),
+                         substitution_costs, indel, out)
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Bounds of Proposition 2.8

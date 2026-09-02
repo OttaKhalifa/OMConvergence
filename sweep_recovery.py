@@ -33,9 +33,10 @@ from pathlib import Path
 
 import numpy as np
 
-from experiments import (ALGORITHMS, ResultsWriter, draw_markov_mixture,
-                         estimate_gamma_paths, eta_rows, gamma_rows, run_dataset,
-                         save_mixture, seed_key, stream, univariate_om)
+from experiments import (ALGORITHMS, ResultsWriter, draw_hmm_mixture,
+                         draw_markov_mixture, estimate_gamma_paths, eta_rows,
+                         gamma_rows, multichannel_om, run_dataset, save_mixture,
+                         seed_key, stream, univariate_om)
 
 SEED = 20260901
 ALPHAS = (0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 5.0, 10.0)     # the grid of the published figures
@@ -50,6 +51,34 @@ ETA_FIELDS = ["alpha", "K", "mixture_id", "n", "cost_scheme", "eta_hat", "eta_ci
               "eta_ci_high", "separation_status", "n_pairs", "level", "mixture_key"]
 GAMMA_FIELDS = ["alpha", "K", "mixture_id", "n", "cost_scheme", "k", "l", "gamma_hat",
                 "se", "ci_low", "ci_high", "n_pairs", "level", "mixture_key"]
+
+
+# --- the mechanism the sweep runs on ----------------------------------------
+#
+# Markov chains index difficulty by the Dirichlet concentration alpha. HMMs have no such
+# knob, so the same axis becomes the emission concentration alpha_B, read the same way:
+# small values give sharply peaked emissions, hence components that are easy to tell apart.
+# Everything downstream -- the geometry, the four algorithms, the rules for K -- reads only
+# a dissimilarity matrix and does not know which mechanism produced it.
+
+HMM_STATES = 4
+HMM_VARS = 5
+HMM_CATEGORIES = [5] * 5
+
+
+def build_om(kind, cost, seed):
+    """The dissimilarity, built once: it does not depend on the mixture."""
+    if kind == "markov":
+        return univariate_om(cost, D_STATES, rng=stream(seed, "cost", cost))
+    return multichannel_om(cost, HMM_CATEGORIES, sub=2.0, indel=1.0)
+
+
+def build_mixture(kind, K, alpha, mixture_id, seed):
+    """One mixture of the requested mechanism, drawn on its own stream."""
+    if kind == "markov":
+        return draw_markov_mixture(K, D_STATES, alpha, mixture_id, seed)
+    return draw_hmm_mixture(K, HMM_STATES, HMM_VARS, HMM_CATEGORIES, mixture_id, seed,
+                            alpha_A=0.5, alpha_B=alpha)
 
 
 def done_runs(path):
@@ -71,12 +100,16 @@ def main():
     parser.add_argument("--cost", default="constant", choices=("constant", "random", "trate"))
     parser.add_argument("--alphas", type=float, nargs="+", default=None)
     parser.add_argument("--pam-restarts", type=int, default=1)
+    parser.add_argument("--mechanism", default="markov", choices=("markov", "hmm"),
+                        help="markov: mixtures of first-order chains. hmm: mixtures of "
+                             "homogeneous multichannel HMMs, five channels of five "
+                             "letters, with alpha read as alpha_B")
     parser.add_argument("--tag", default="")
     parser.add_argument("--out", default="results")
     args = parser.parse_args()
 
     n_grid = np.asarray(sorted(args.horizons), dtype=np.int64)
-    om = univariate_om(args.cost, D_STATES, rng=stream(SEED, "cost", args.cost))
+    om = build_om(args.mechanism, args.cost, SEED)
     out = Path(args.out)
     suffix = f"_{args.tag}" if args.tag else ""
     cluster_path = out / f"recovery_cluster{suffix}.csv"
@@ -108,7 +141,7 @@ def main():
     try:
         for alpha, K in cells:
             for m in range(args.n_mixtures):
-                mixture = draw_markov_mixture(K, D_STATES, alpha, m, SEED)
+                mixture = build_mixture(args.mechanism, K, alpha, m, SEED)
                 wrote_geometry = False
                 for r in range(args.n_datasets):
                     finished += 1

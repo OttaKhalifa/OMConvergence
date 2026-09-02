@@ -37,8 +37,9 @@ Contents
 --------
 Reproducibility : ``stream``, ``seed_key``
 Uncertainty     : ``wilson_interval``, ``simultaneous_intervals``
-Mixtures        : ``MarkovMixture``, ``draw_markov_mixture``, ``save_mixture``
-Dissimilarity   : ``UnivariateOM``
+Mixtures        : ``MarkovMixture``, ``draw_markov_mixture``, ``save_mixture``,
+                  ``HMMMixture``, ``draw_hmm_mixture``
+Dissimilarity   : ``UnivariateOM``, ``MultichannelOM``
 Geometry        : ``GammaEstimate``, ``estimate_gamma_paths``
 Clustering      : ``run_dataset``, ``labels_at_k``, ``ALGORITHMS``
 Storage         : ``ResultsWriter``
@@ -57,8 +58,10 @@ from scipy.stats import norm, t
 from clustering import (adjusted_rand_index, exact_recovery, hac_labels, pam,
                         profile_graph_k, profile_heights, profile_distances,
                         safeguard_threshold)
-from generators import sample_markov_model, sample_mixture
-from om import check_assumption_metric, cost_scheme, gamma_hat_paths, om_matrices
+from generators import MixtureOfHMMGenerator, sample_markov_model, sample_mixture
+from om import (check_assumption_metric, cost_scheme, gamma_hat_paths,
+                multichannel_cost_scheme, om_matrices, om_multichannel_matrices,
+                om_multichannel_paths)
 
 ALGORITHMS = ("single", "complete", "average", "pam")
 
@@ -198,8 +201,17 @@ def save_mixture(mixture, directory):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"mixture_{mixture.mixture_id:04d}_alpha{mixture.alpha}_K{mixture.K}.npz"
-    np.savez_compressed(path, kernels=mixture.kernels, weights=mixture.weights,
-                        alpha=mixture.alpha, K=mixture.K, d=mixture.d, key=mixture.key)
+    payload = {"weights": mixture.weights, "alpha": mixture.alpha, "K": mixture.K,
+               "d": mixture.d, "key": mixture.key}
+    if hasattr(mixture, "kernels"):
+        payload["kernels"] = mixture.kernels
+    else:                                    # an HMM: store what defines each component
+        for k, component in enumerate(mixture.generator.components):
+            payload[f"pi_{k}"] = component.pi
+            payload[f"A_{k}"] = component.A
+            for c, B in enumerate(component.B):
+                payload[f"B_{k}_{c}"] = B
+    np.savez_compressed(path, **payload)
     return path
 
 
@@ -246,6 +258,131 @@ def univariate_om(name, d, rng=None, pilot_sequences=None, **kwargs):
     """Build a `UnivariateOM` from one of the three schemes of `om.cost_scheme`."""
     S, delta = cost_scheme(name, d, rng=rng, pilot_sequences=pilot_sequences, **kwargs)
     return UnivariateOM(name=name, S=S, delta=delta)
+
+
+@dataclass(frozen=True)
+class HMMMixture:
+    """K homogeneous multichannel HMMs, drawn once and held fixed.
+
+    The same contract as `MarkovMixture` -- `sample_component` for an independent estimate of
+    Gamma^(n), `sample_dataset` for a labelled clustering dataset -- so the drivers do not
+    know which mechanism they are running.
+
+    What changes is what a sequence is: an (n, V) array of V conditionally independent
+    channels driven by one latent chain, rather than an (n,) array of observed states. The
+    dissimilarity changes with it, but nothing downstream of the matrix does.
+    """
+
+    mixture_id: int
+    K: int
+    n_states: int
+    n_vars: int
+    n_categories: tuple
+    generator: MixtureOfHMMGenerator
+    key: str
+
+    @property
+    def alpha(self):
+        """No Dirichlet concentration here; the field exists so the tables share a schema."""
+        return float("nan")
+
+    @property
+    def d(self):
+        return int(np.prod(self.n_categories))
+
+    @property
+    def weights(self):
+        return self.generator.w
+
+    def sample_component(self, k, n_sequences, seq_len, rng):
+        return self.generator.sample_component(k, n_sequences, seq_len, rng=rng)
+
+    def sample_dataset(self, N, seq_len, rng):
+        saved = self.generator.rng
+        self.generator.rng = rng
+        try:
+            data = self.generator.sample_dataset(N, seq_len)
+        finally:
+            self.generator.rng = saved
+        return data["X"], data["y"]
+
+
+def draw_hmm_mixture(K, n_states, n_vars, n_categories, mixture_id, base_seed,
+                     alpha_A=0.5, alpha_B=0.3, min_weight=0.10):
+    """Draw one mixture of homogeneous multichannel HMMs, on its own stream.
+
+    `alpha_A` and `alpha_B` play the role `alpha` plays for Markov chains: small values give
+    sharply peaked transition and emission laws, hence components that are easy to tell
+    apart, large ones near-uniform laws and components that are not.
+    """
+    rng = stream(base_seed, "hmm-mixture", K, n_states, n_vars, mixture_id)
+    generator = MixtureOfHMMGenerator(
+        n_components=K, n_states=n_states, n_vars=n_vars, n_categories=n_categories,
+        alpha_A=alpha_A, alpha_B=alpha_B, min_weight=min_weight, rng=rng)
+    return HMMMixture(mixture_id=mixture_id, K=int(K), n_states=int(n_states),
+                      n_vars=int(n_vars), n_categories=tuple(generator.C_list),
+                      generator=generator,
+                      key=seed_key("hmm-mixture", K, n_states, n_vars, mixture_id))
+
+
+@dataclass(frozen=True)
+class MultichannelOM:
+    """Multichannel OM with costs fixed in advance, the interface of `UnivariateOM`.
+
+    Costs are *not* estimated from the data, unlike `om.om_trate_distances`. Gamma^(n) is
+    estimated on an independent sample, and a cost scheme derived from the sample would make
+    the dissimilarity depend on which sequences happened to be drawn.
+    """
+
+    name: str
+    costs: np.ndarray           # (V, C_max, C_max), the packed per-channel matrices
+    indel: float                # the aggregated gap cost, sum_c lambda_c delta^(c)
+    M_mc: float
+    n_categories: tuple
+    channel_indel: np.ndarray   # (V,), the per-channel gap costs
+
+    @property
+    def M(self):
+        """M^mc, the aggregated largest substitution cost."""
+        return self.M_mc
+
+    def assumption_1(self):
+        """Conditions (i)-(vi), checked on each channel.
+
+        The paper notes right after Definition 4.1 that Assumption 1 is stable under the
+        aggregation: if every ``(c_sub^(c), delta^(c))`` satisfies (i)-(vi) on Sigma_c, so
+        does the aggregate on the product alphabet. Checking the channels is therefore
+        equivalent, and it is the only tractable route -- five channels of five letters make
+        a product alphabet of 3125, on which the triangle inequality alone is a 3125^3 table,
+        227 GiB.
+
+        Returns the per-condition conjunction over channels, plus ``M = max c_sub`` for the
+        aggregate, which is the constant the profile threshold needs.
+        """
+        verdicts = []
+        for c, size in enumerate(self.n_categories):
+            S = self.costs[c][:size, :size]
+            verdicts.append(check_assumption_metric(S, np.full(size, self.channel_indel[c])))
+        out = {k: bool(all(v[k] for v in verdicts)) for k in verdicts[0] if k.startswith("(")}
+        out["zero diagonal"] = bool(all(v["zero diagonal"] for v in verdicts))
+        out["M = max c_sub"] = float(self.M_mc)
+        return out
+
+    def gamma_paths(self, X, Y, n_grid):
+        return om_multichannel_paths(X, Y, np.asarray(n_grid, dtype=np.int64),
+                                     self.costs, self.indel)
+
+    def matrices(self, X, n_grid):
+        return om_multichannel_matrices(X, np.asarray(n_grid, dtype=np.int64),
+                                        self.costs, self.indel)
+
+
+def multichannel_om(name, n_categories, **kwargs):
+    """Build a `MultichannelOM` from one of the fixed schemes of `om`."""
+    costs, indel, M, channel_indel = multichannel_cost_scheme(name, n_categories, **kwargs)
+    return MultichannelOM(name=f"{name}-mc", costs=costs, indel=indel, M_mc=M,
+                          n_categories=tuple(int(c) for c in n_categories),
+                          channel_indel=channel_indel)
 
 
 # ---------------------------------------------------------------------------
