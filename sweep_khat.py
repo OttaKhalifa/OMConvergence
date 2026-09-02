@@ -29,9 +29,9 @@ from pathlib import Path
 
 import numpy as np
 
-from clustering import (exact_recovery, geomean_threshold, profile_distances,
-                        profile_graph_k, profile_heights, profile_threshold,
-                        ratio_threshold)
+from clustering import (asw_select_k, exact_recovery, geomean_threshold,
+                        profile_distances, profile_graph_k, profile_heights,
+                        profile_threshold, ratio_threshold)
 from experiments import (ResultsWriter, draw_markov_mixture, estimate_gamma_paths, eta_rows,
                          save_mixture, seed_key, stream, univariate_om)
 
@@ -42,19 +42,34 @@ D_STATES = 5
 
 GRID_FIELDS = ["alpha", "K", "mixture_id", "dataset_id", "n", "N", "d", "cost_scheme",
                "rule", "threshold", "k_hat", "k_correct", "exact_recovery", "mixture_key"]
+
+K_MAX_ASW = 12          # the grid tops out at K = 10; 12 leaves the ASW rules room to overshoot
 ETA_FIELDS = ["alpha", "K", "mixture_id", "n", "cost_scheme", "eta_hat", "eta_ci_low",
               "eta_ci_high", "separation_status", "n_pairs", "level", "mixture_key"]
 
 
-def rules_for(rho, heights, N, n, M):
-    """(name, threshold) for each rule, on one precomputed profile matrix."""
+def evaluate_rules(D, rho, heights, N, n, M, with_asw):
+    """(name, threshold, k_hat, labels) for every rule, on one dissimilarity matrix.
+
+    The four profile rules differ only in where they cut the same rho, so they share one
+    O(N^3) profile computation. The ASW rules do not read rho at all: they cluster at every
+    k and score the result, which is why they cost an order of magnitude more.
+    """
     half = (N + 1) // 2 - 1
-    return (
-        ("stated", profile_threshold(N, n, M)),
-        ("geomean", geomean_threshold(rho, heights)),
-        ("ratio", ratio_threshold(rho, heights)),
-        ("ratio-half", ratio_threshold(rho, heights, floor=half)),
-    )
+    out = []
+    for name, threshold in (("stated", profile_threshold(N, n, M)),
+                            ("geomean", geomean_threshold(rho, heights)),
+                            ("ratio", ratio_threshold(rho, heights)),
+                            ("ratio-half", ratio_threshold(rho, heights, floor=half))):
+        k_hat, labels = profile_graph_k(None, rho=rho, threshold=threshold,
+                                        return_labels=True)
+        out.append((name, threshold, k_hat, labels))
+    if with_asw:
+        for method, name in (("pam", "asw-pam"), ("average", "asw-average")):
+            k_hat, labels = asw_select_k(D, k_max=K_MAX_ASW, method=method,
+                                         return_labels=True)
+            out.append((name, "", k_hat, labels))
+    return out
 
 
 def done_mixtures(path):
@@ -74,18 +89,27 @@ def main():
     parser.add_argument("--horizons", type=int, nargs="+", default=[400, 1000])
     parser.add_argument("--N", type=int, default=200)
     parser.add_argument("--out", default="results")
+    parser.add_argument("--tag", default="", help="suffix for the output files")
+    parser.add_argument("--asw", action="store_true",
+                        help="also run the applied default, K by maximal silhouette width")
+    parser.add_argument("--alphas", type=float, nargs="+", default=None,
+                        help="restrict the alpha grid")
     args = parser.parse_args()
 
     n_grid = np.asarray(sorted(args.horizons), dtype=np.int64)
     om = univariate_om("constant", D_STATES)
     out = Path(args.out)
-    grid_path, eta_path = out / "khat_grid.csv", out / "khat_eta.csv"
+    suffix = f"_{args.tag}" if args.tag else ""
+    grid_path = out / f"khat_grid{suffix}.csv"
+    eta_path = out / f"khat_eta{suffix}.csv"
     already = done_mixtures(grid_path)
 
-    cells = [(a, K) for a in ALPHAS for K in KS]
+    alphas = tuple(args.alphas) if args.alphas else ALPHAS
+    cells = [(a, K) for a in alphas for K in KS]
     total = len(cells) * args.n_mixtures
     print(f"{len(cells)} cells x {args.n_mixtures} mixtures x {args.n_datasets} dataset(s), "
-          f"N = {args.N}, horizons {list(n_grid)}")
+          f"N = {args.N}, horizons {list(n_grid)}, alphas {list(alphas)}"
+          f"{', with ASW' if args.asw else ''}")
     print(f"{len(already)} mixtures already done, skipping those\n", flush=True)
 
     grid_writer = ResultsWriter(grid_path, GRID_FIELDS)
@@ -115,10 +139,8 @@ def main():
                     for g, n in enumerate(n_grid):
                         rho = profile_distances(matrices[g])
                         heights = profile_heights(rho)
-                        for name, threshold in rules_for(rho, heights, args.N, int(n), om.M):
-                            k_hat, labels = profile_graph_k(None, rho=rho,
-                                                            threshold=threshold,
-                                                            return_labels=True)
+                        for name, threshold, k_hat, labels in evaluate_rules(
+                                matrices[g], rho, heights, args.N, int(n), om.M, args.asw):
                             rows.append({
                                 "alpha": alpha, "K": K, "mixture_id": m, "dataset_id": r,
                                 "n": int(n), "N": args.N, "d": D_STATES,

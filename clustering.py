@@ -11,6 +11,7 @@ Hierarchical   : ``hac_labels`` (single, complete, average), ``single_linkage_tr
 PAM            : ``pam``, ``pam_objective``, ``pam_certify_one_swap``
 Selecting K    : ``profile_graph_k`` cuts; ``profile_threshold`` (Theorem 3.9),
                  ``geomean_threshold`` and ``ratio_threshold`` (no constant) choose where
+Selecting K, applied : ``asw_select_k``, ``average_silhouette``, ``silhouette_widths``
 Scoring        : ``exact_recovery`` (the primary outcome), ``adjusted_rand_index``
 
 Two estimators the paper states are implemented here in the form it states them: the
@@ -457,6 +458,77 @@ def pam(D, K, rng=None, n_restarts=1, max_swaps=10_000, tol=0.0):
         n_swaps=swaps,
         hit_cap=hit_cap,
     )
+
+
+# ---------------------------------------------------------------------------
+# Selecting K the applied way: average silhouette width
+# ---------------------------------------------------------------------------
+
+
+def silhouette_widths(D, labels):
+    """s(i) for every point, from a precomputed dissimilarity matrix.
+
+    s(i) = (b(i) - a(i)) / max(a(i), b(i)), with a(i) the mean dissimilarity to the other
+    members of i's own block and b(i) the smallest mean dissimilarity to another block. A
+    singleton block is given s(i) = 0, the usual convention: there is no within-block mean
+    to compare against, and scoring it 1 would reward splitting points off.
+    """
+    D = np.asarray(D, dtype=float)
+    labels = np.unique(np.asarray(labels), return_inverse=True)[1]
+    N, K = D.shape[0], labels.max() + 1
+    if K < 2:
+        return np.zeros(N)
+    onehot = np.zeros((N, K))
+    onehot[np.arange(N), labels] = 1.0
+    sums = D @ onehot                                   # (N, K) total distance to each block
+    counts = onehot.sum(axis=0)                         # (K,)
+
+    own = counts[labels]
+    a = np.where(own > 1, sums[np.arange(N), labels] / np.maximum(own - 1, 1), 0.0)
+    other = sums / np.maximum(counts, 1)[None, :]
+    other[np.arange(N), labels] = np.inf
+    other[:, counts == 0] = np.inf
+    b = other.min(axis=1)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        s = (b - a) / np.maximum(a, b)
+    return np.where(own > 1, np.nan_to_num(s), 0.0)
+
+
+def average_silhouette(D, labels):
+    """ASW: the mean silhouette width, the criterion applied practice maximises over K."""
+    return float(np.mean(silhouette_widths(D, labels)))
+
+
+def asw_select_k(D, k_max=15, method="pam", rng=None, pam_restarts=1, return_labels=False):
+    """Estimate K by maximising the average silhouette width over k = 2 ... k_max.
+
+    This is the default route in sequence analysis -- `as.clustrange` and `wcKMedRange` in
+    WeightedCluster cluster at every k and keep the k with the largest ASW -- so it is the
+    benchmark any new rule for K has to beat, not a straw man.
+
+    Two structural differences from the profile rules are worth keeping in view. The
+    silhouette is undefined at k = 1, so this can never return 1: it cannot make the error
+    that sinks the stated threshold, but it also cannot report "no clusters". And ASW
+    rewards compact, well-separated blocks, whereas an OM mixture has diffuse ones --
+    gamma(P, P) is not zero, so a component is never a point. Merging two adjacent diffuse
+    blocks often raises the mean silhouette, which biases the choice towards small k.
+    """
+    D = np.asarray(D, dtype=float)
+    best = (-np.inf, None, None)
+    for k in range(2, min(k_max, D.shape[0] - 1) + 1):
+        labels = (pam(D, k, rng=rng, n_restarts=pam_restarts).labels if method == "pam"
+                  else hac_labels(D, k, method=method))
+        if len(np.unique(labels)) < 2:
+            continue
+        score = average_silhouette(D, labels)
+        if score > best[0]:
+            best = (score, k, labels)
+    if best[1] is None:
+        k_hat, labels = 1, np.zeros(D.shape[0], dtype=np.int64)
+    else:
+        _, k_hat, labels = best
+    return (int(k_hat), labels) if return_labels else int(k_hat)
 
 
 # ---------------------------------------------------------------------------
