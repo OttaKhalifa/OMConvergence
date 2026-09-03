@@ -274,17 +274,13 @@ class HMMMixture:
     """
 
     mixture_id: int
+    alpha: float                # the emission concentration alpha_B, the grid axis
     K: int
     n_states: int
     n_vars: int
     n_categories: tuple
     generator: MixtureOfHMMGenerator
     key: str
-
-    @property
-    def alpha(self):
-        """No Dirichlet concentration here; the field exists so the tables share a schema."""
-        return float("nan")
 
     @property
     def d(self):
@@ -308,20 +304,37 @@ class HMMMixture:
 
 
 def draw_hmm_mixture(K, n_states, n_vars, n_categories, mixture_id, base_seed,
-                     alpha_A=0.5, alpha_B=0.3, min_weight=0.10):
+                     alpha=None, alpha_pi=None, alpha_A=0.5, alpha_B=0.3, min_weight=0.10):
     """Draw one mixture of homogeneous multichannel HMMs, on its own stream.
 
-    `alpha_A` and `alpha_B` play the role `alpha` plays for Markov chains: small values give
-    sharply peaked transition and emission laws, hence components that are easy to tell
-    apart, large ones near-uniform laws and components that are not.
+    Passing `alpha` ties the three concentrations together -- initial law, transitions and
+    emissions all drawn from Dirichlet(alpha) -- and that is the single knob the grid turns.
+    Turning `alpha_B` alone does not make the problem hard: five channels of five letters
+    carry so much information that components stay distinguishable whatever their emissions
+    look like, as long as their latent chains differ. The chain has to be blurred too, and
+    `alpha` blurs all three at once.
+
+    Small values give sharply peaked laws and components that are easy to tell apart, large
+    ones near-uniform laws and components that are not, exactly as for a Dirichlet-drawn
+    Markov kernel -- but on a different scale, since the two mechanisms put different amounts
+    of information into a sequence of the same length.
+
+    The stream key deliberately omits the concentration, so mixtures at different alpha come
+    from the same stream and differ only through alpha itself, which makes the columns of the
+    grid paired rather than independent.
     """
+    if alpha is not None:
+        alpha_pi = alpha_A = alpha_B = float(alpha)
+    if alpha_pi is None:
+        alpha_pi = alpha_A
     rng = stream(base_seed, "hmm-mixture", K, n_states, n_vars, mixture_id)
     generator = MixtureOfHMMGenerator(
         n_components=K, n_states=n_states, n_vars=n_vars, n_categories=n_categories,
-        alpha_A=alpha_A, alpha_B=alpha_B, min_weight=min_weight, rng=rng)
-    return HMMMixture(mixture_id=mixture_id, K=int(K), n_states=int(n_states),
-                      n_vars=int(n_vars), n_categories=tuple(generator.C_list),
-                      generator=generator,
+        alpha_pi=alpha_pi, alpha_A=alpha_A, alpha_B=alpha_B, min_weight=min_weight, rng=rng)
+    return HMMMixture(mixture_id=mixture_id,
+                      alpha=float(alpha if alpha is not None else alpha_B), K=int(K),
+                      n_states=int(n_states), n_vars=int(n_vars),
+                      n_categories=tuple(generator.C_list), generator=generator,
                       key=seed_key("hmm-mixture", K, n_states, n_vars, mixture_id))
 
 

@@ -40,6 +40,7 @@ from experiments import (ALGORITHMS, ResultsWriter, draw_hmm_mixture,
 
 SEED = 20260901
 ALPHAS = (0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 5.0, 10.0)     # the grid of the published figures
+HMM_ALPHAS = (0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 100.0)   # the same span, on the HMM scale
 KS = (2, 3, 4, 5, 6, 7, 8, 9, 10)
 D_STATES = 5
 
@@ -55,9 +56,12 @@ GAMMA_FIELDS = ["alpha", "K", "mixture_id", "n", "cost_scheme", "k", "l", "gamma
 
 # --- the mechanism the sweep runs on ----------------------------------------
 #
-# Markov chains index difficulty by the Dirichlet concentration alpha. HMMs have no such
-# knob, so the same axis becomes the emission concentration alpha_B, read the same way:
-# small values give sharply peaked emissions, hence components that are easy to tell apart.
+# Markov chains index difficulty by the Dirichlet concentration alpha. For HMMs the same
+# axis ties the three concentrations -- initial law, transitions, emissions -- to one
+# alpha. Turning the emissions alone does not make the problem hard: five channels of
+# five letters carry enough that components stay apart whatever their emissions look
+# like, as long as their latent chains differ. Measured, the tied knob crosses eta = 0
+# near alpha = 20, where turning alpha_B alone never left eta below 0.38.
 # Everything downstream -- the geometry, the four algorithms, the rules for K -- reads only
 # a dissimilarity matrix and does not know which mechanism produced it.
 
@@ -78,7 +82,7 @@ def build_mixture(kind, K, alpha, mixture_id, seed):
     if kind == "markov":
         return draw_markov_mixture(K, D_STATES, alpha, mixture_id, seed)
     return draw_hmm_mixture(K, HMM_STATES, HMM_VARS, HMM_CATEGORIES, mixture_id, seed,
-                            alpha_A=0.5, alpha_B=alpha)
+                            alpha=alpha)
 
 
 def done_runs(path):
@@ -119,7 +123,8 @@ def main():
 
     assumption = om.assumption_1()
     metric_ok = all(v for k, v in assumption.items() if k.startswith("("))
-    alphas = tuple(args.alphas) if args.alphas else ALPHAS
+    default_alphas = HMM_ALPHAS if args.mechanism == "hmm" else ALPHAS
+    alphas = tuple(args.alphas) if args.alphas else default_alphas
     cells = [(a, K) for a in alphas for K in KS]
     total = len(cells) * args.n_mixtures * args.n_datasets
 

@@ -43,9 +43,12 @@ ETA_FIELDS = ["alpha", "K", "mixture_id", "n", "cost_scheme", "eta_hat", "eta_ci
 
 # --- the mechanism the sweep runs on ----------------------------------------
 #
-# Markov chains index difficulty by the Dirichlet concentration alpha. HMMs have no such
-# knob, so the same axis becomes the emission concentration alpha_B, read the same way:
-# small values give sharply peaked emissions, hence components that are easy to tell apart.
+# Markov chains index difficulty by the Dirichlet concentration alpha. For HMMs the same
+# axis ties the three concentrations -- initial law, transitions, emissions -- to one
+# alpha. Turning the emissions alone does not make the problem hard: five channels of
+# five letters carry enough that components stay apart whatever their emissions look
+# like, as long as their latent chains differ. Measured, the tied knob crosses eta = 0
+# near alpha = 20, where turning alpha_B alone never left eta below 0.38.
 # Everything downstream -- the geometry, the four algorithms, the rules for K -- reads only
 # a dissimilarity matrix and does not know which mechanism produced it.
 
@@ -66,7 +69,7 @@ def build_mixture(kind, K, alpha, mixture_id, seed):
     if kind == "markov":
         return draw_markov_mixture(K, D_STATES, alpha, mixture_id, seed)
     return draw_hmm_mixture(K, HMM_STATES, HMM_VARS, HMM_CATEGORIES, mixture_id, seed,
-                            alpha_A=0.5, alpha_B=alpha)
+                            alpha=alpha)
 
 
 def done_runs(path):

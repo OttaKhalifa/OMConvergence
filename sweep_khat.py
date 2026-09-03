@@ -38,6 +38,7 @@ from experiments import (ResultsWriter, draw_hmm_mixture, draw_markov_mixture,
 
 SEED = 20260901
 ALPHAS = (0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 5.0, 10.0)     # the grid of the published figures
+HMM_ALPHAS = (0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 30.0, 100.0)   # the same span, on the HMM scale
 KS = (2, 3, 4, 5, 6, 7, 8, 9, 10)
 D_STATES = 5
 
@@ -80,8 +81,9 @@ def evaluate_rules(D, rho, heights, N, n, M, with_asw):
 
 # --- the mechanism the sweep runs on ----------------------------------------
 #
-# Markov chains index difficulty by the Dirichlet concentration alpha. HMMs have no such
-# knob, so the same axis becomes the emission concentration alpha_B, read the same way.
+# Markov chains index difficulty by the Dirichlet concentration alpha. For HMMs the same
+# axis ties the three concentrations -- initial law, transitions, emissions -- to one
+# alpha, measured to cross eta = 0 near alpha = 20.
 # The rules for K read only rho, which reads only the dissimilarity matrix, so none of them
 # knows which mechanism produced it.
 
@@ -100,7 +102,7 @@ def build_mixture(kind, K, alpha, mixture_id, seed):
     if kind == "markov":
         return draw_markov_mixture(K, D_STATES, alpha, mixture_id, seed)
     return draw_hmm_mixture(K, HMM_STATES, HMM_VARS, HMM_CATEGORIES, mixture_id, seed,
-                            alpha_A=0.5, alpha_B=alpha)
+                            alpha=alpha)
 
 
 def done_mixtures(path):
@@ -139,7 +141,8 @@ def main():
     eta_path = out / f"khat_eta{suffix}.csv"
     already = done_mixtures(grid_path)
 
-    alphas = tuple(args.alphas) if args.alphas else ALPHAS
+    default_alphas = HMM_ALPHAS if args.mechanism == "hmm" else ALPHAS
+    alphas = tuple(args.alphas) if args.alphas else default_alphas
     cells = [(a, K) for a in alphas for K in KS]
     total = len(cells) * args.n_mixtures
     print(f"{len(cells)} cells x {args.n_mixtures} mixtures x {args.n_datasets} dataset(s), "
