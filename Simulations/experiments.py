@@ -510,6 +510,21 @@ def run_dataset(mixture, om, N, n_grid, rng, dataset_id, algorithms=ALGORITHMS,
                 pam_restarts=1, extra=None):
     """Simulate one clustering dataset and score every algorithm at every horizon.
 
+    Sampling and scoring are split so that a caller holding the matrices already -- the
+    grid notebook, which scores the algorithms and the rules for K on the same ones --
+    pays for them once. This entry point is the one that draws its own dataset.
+    """
+    n_grid = np.asarray(n_grid, dtype=np.int64)
+    X, truth = mixture.sample_dataset(N, int(n_grid[-1]), rng)
+    return score_dataset(mixture, om, om.matrices(X, n_grid), truth, N, n_grid, rng,
+                         dataset_id, algorithms=algorithms, pam_restarts=pam_restarts,
+                         extra=extra)
+
+
+def score_dataset(mixture, om, matrices, truth, N, n_grid, rng, dataset_id,
+                  algorithms=ALGORITHMS, pam_restarts=1, extra=None):
+    """Score every algorithm at every horizon, on dissimilarity matrices already computed.
+
     The dissimilarity matrix is computed once per horizon and reused by all algorithms, so
     what separates them is the algorithm alone. Exact recovery is the primary outcome, being
     what Theorems 3.5, 3.8 and 3.9 are statements about; ARI is kept as a secondary,
@@ -520,9 +535,6 @@ def run_dataset(mixture, om, N, n_grid, rng, dataset_id, algorithms=ALGORITHMS,
     K, and does the resulting partition recover P* -- then come from the same run.
     """
     n_grid = np.asarray(n_grid, dtype=np.int64)
-    X, truth = mixture.sample_dataset(N, int(n_grid[-1]), rng)
-    matrices = om.matrices(X, n_grid)
-
     rows = []
     for g, n in enumerate(n_grid):
         D = matrices[g]
