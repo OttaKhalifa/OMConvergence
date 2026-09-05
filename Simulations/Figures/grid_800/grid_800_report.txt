@@ -1,6 +1,7 @@
 FIGURES DE LA GRILLE (alpha, K) -- RUN N = 800
 ==============================================
 
+Dossier: Simulations/Figures/grid_800/
 Produites par Simulations/difficulty_grid.ipynb, SOURCE = "compute".
 Run du 2026-09-03 16:20 au 2026-09-05 08:51, soit 40 h 31 en continu.
 Tables: results/grid_N800_{eta,cluster,khat}.csv (1890 / 7560 / 3780 lignes).

@@ -53,7 +53,7 @@ $\hat K$ sweep never started. The files already in `Figures/HMM/` predate the re
 the HMM $\alpha$ axis and do not match the grid `run_hmm_night.sh` now uses.
 
 `Figures/Recovery/` also still holds `ari_grid_*`, `k_hat_grid` and the `kmedoids` figures the
-superseded notebooks in `../legacy/` produced; `Figures/Grid/` is what replaces them.
+superseded notebooks in `../legacy/` produced; `Figures/grid_800/` is what replaces them.
 
 Numba caches its compiled kernels on disk, so only the first run of a session pays the ~10 s of
 compilation. Without numba the library still runs, in pure Python and orders of magnitude slower.
