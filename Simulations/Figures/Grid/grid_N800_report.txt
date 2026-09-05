@@ -1,0 +1,101 @@
+FIGURES DE LA GRILLE (alpha, K) -- RUN N = 800
+==============================================
+
+Produites par Simulations/difficulty_grid.ipynb, SOURCE = "compute".
+Run du 2026-09-03 16:20 au 2026-09-05 08:51, soit 40 h 31 en continu.
+Tables: results/grid_N800_{eta,cluster,khat}.csv (1890 / 7560 / 3780 lignes).
+
+
+1. PARAMETRES DU RUN
+--------------------
+
+Ce sont les seuls parametres sous lesquels les quatre figures sont valides.
+Toute figure redessinee a partir d'autres tables doit reprendre ce bloc.
+
+    N            = 800      sequences par jeu de donnees de clustering
+    R_MIX        = 30       mixtures par cellule (alpha, K)
+    ALPHAS       = [0.2, 0.3, 0.4, 0.5, 1.0, 5.0, 10.0]
+    KS           = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    HORIZON      = 1000     l'unique horizon calcule et reporte
+    D_STATES     = 5        etats de la chaine
+    COST         = constant Assumption 1 verifiee, M = 2.000
+    N_GAMMA      = 60       paires de trajectoires par entree de Gamma^(n)
+    LEVEL        = 0.95     Wilson, et bornes simultanees sur Gamma^(n)
+    SEED         = 20260901
+    PAM_RESTARTS = 1
+    K_MAX_ASW    = 12       la grille plafonne a K = 10, ASW peut surestimer
+
+    7 x 9 = 63 cellules x 30 mixtures = 1890 mixtures, 1 jeu par mixture.
+
+Tirage: K noyaux a lignes i.i.d. Dirichlet(alpha) sur d = 5 etats, poids
+uniformes 1/K. Chaque mixture est tiree une fois et tenue fixe.
+
+Monte Carlo a deux niveaux: Gamma^(n) est estime sur 60 paires de
+trajectoires INDEPENDANTES du jeu de N = 800 sequences sur lequel tourne le
+clustering. Les quatre algorithmes et les deux regles pour K sont scores sur
+les MEMES matrices OM, donc toutes les comparaisons entre eux sont appariees.
+
+Algorithmes scores: single, complete, average, pam (corps: average et pam).
+Regles pour K: safeguard (celle du papier) et asw-pam (le defaut applique).
+
+
+2. LES QUATRE FIGURES
+---------------------
+
+separation.{pdf,png} -- plausibilite de l'hypothese 3 a n = 1000
+    Couleur: Pr(eta_n > 0 etabli) - Pr(eta_n < 0 etabli), verdict par bornes
+    simultanees a 95 %. Annotations: proportion separee, et mediane de eta_n.
+    Demi-largeur mediane de l'intervalle de Wilson: 0.122.
+    Nombre de mixtures separees, sur 270 par ligne alpha:
+        alpha <= 1.0 : 171 a 202     alpha = 5 : 61     alpha = 10 : 27
+    La bascule se lit aussi en K: a alpha <= 1 la balance reste positive
+    jusqu'a K = 8 et passe negative a K = 9 (exception alpha = 0.4, positive
+    jusqu'a K = 9); a alpha >= 5 elle bascule des K = 4.
+
+recovery.{pdf,png} -- recouvrement exact, average contre pam
+    Couleur: probabilite de recouvrement exact. Annotation: ARI moyen.
+    Global: pam 64.4 %, complete 55.2 %, average 51.1 %, single 38.7 %.
+    PAM certifie stationnaire a un swap dans 1860/1890 runs; il atteint le
+    plafond de swaps 30 fois, sans consequence (dans la region separee,
+    alpha <= 1, ces runs recouvrent a 91.7 % contre 89.1 % pour les autres).
+
+recovery_single_linkage.{pdf,png} -- la meme carte pour le single linkage
+    En annexe. C'est l'algorithme dont la condition de separation est presque
+    exactement necessaire, d'ou sa presence separee.
+
+k_selection.{pdf,png} -- Pr(K_hat = K), safeguard contre ASW-PAM
+    Annotation: Pr(partition exacte). Sur les 1890 mixtures:
+        safeguard : K_hat = K dans 57.9 % [56, 60], partition exacte 56.3 %
+        asw-pam   : K_hat = K dans 38.5 % [36, 41], partition exacte 32.0 %
+
+
+3. CE QUE LES DEUX CARTES DISENT ENSEMBLE
+-----------------------------------------
+
+Recouvrement exact par bande de eta_n, tous alphas confondus:
+
+    bande eta_n   mixtures   single  complete  average   pam
+    < 0               691        0%        5%       0%    30%
+    0 - .02           235        0%       46%      14%    38%
+    .02 - .05         201       16%       82%      87%    82%
+    .05 - .10         239       78%       92%      98%    98%
+    .10 - .20         282       95%       97%      99%    99%
+    > .20             242      100%       99%     100%   100%
+
+L'ordre des algorithmes n'est pas le meme au-dessus et au-dessous de .02.
+Au-dessus, average et pam se valent et dominent; au-dessous, PAM est seul a
+recouvrir quoi que ce soit (30 % la ou eta_n < 0) tandis qu'average tombe a
+0 % et se fait doubler par le complete linkage. Les lignes alpha = 5 et
+alpha = 10 de recovery.png sont ce meme phenomene lu en alpha.
+
+
+4. RESERVE
+----------
+
+La regle geomean n'a pas ete scoree dans ce run: RULES ne contient que
+safeguard et asw-pam. A N = 200, geomean battait safeguard de facon
+significative (62 pertes contre 27 gains en apparie, p = 2.7e-4). Le seuil
+geomean ne lit que les hauteurs de fusion rho, mais ni rho ni les matrices OM
+ne sont persistes, donc ce run ne permet pas de rejouer la comparaison: il
+faudrait relancer les 40 h. Sauver h_med et h_max, deux flottants par unite,
+suffirait a rendre toute regle de seuil rejouable hors ligne.
