@@ -68,19 +68,25 @@ def heatmap(ax, values, rows, cols, title, annot=None, cmap=None, vmin=0.0, vmax
 
 
 def plot_paths(ax, horizons, replicates, group_means, colour, ylabel, title):
-    """One thin line per replicate, the group means between, the grand mean on top.
+    """One thin line per replicate, the per-mixture means between, the grand mean on top.
 
-    The layout of `plot_gamma_convergence` in om_convergence.ipynb. A replicate is a sample
-    path -- the same sequences read at growing lengths -- so the spread between thin lines is
-    the variability of one experiment, not an interval around the mean.
+    The layout of the ARI-against-$n$ figures: `recovery_path.ipynb` and `hmm.ipynb` differ
+    only in the table they read and the title they carry. A replicate is a sample path --
+    the same sequences read at growing lengths -- so the spread between thin lines is the
+    variability of one experiment, not an interval around the mean.
+
+    The grand mean is drawn before the proxy handle of the per-mixture means, so the legend
+    reads mean-then-mixtures; the lines themselves are drawn thinnest first, so the order of
+    the two blocks below is not interchangeable.
     """
     ax.plot(horizons, replicates.T, color=colour, lw=0.6, alpha=0.13)
     if group_means is not None:
         ax.plot(horizons, group_means.T, color=colour, lw=0.9, alpha=0.5)
-        ax.plot([], [], color=colour, lw=0.9, alpha=0.5,
-                label=rf"{group_means.shape[0]} mixture means")
     ax.plot(horizons, replicates.mean(0), color=colour, lw=1.9,
             label=rf"mean over {replicates.shape[0]} replicates")
+    if group_means is not None:
+        ax.plot([], [], color=colour, lw=0.9, alpha=0.5,
+                label=rf"{group_means.shape[0]} mixture means")
     ax.set_xlabel(r"$n$, length of a sequence")
     ax.set_ylabel(ylabel)
     ax.set_ylim(-0.04, 1.04)

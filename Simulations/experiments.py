@@ -538,8 +538,8 @@ def score_dataset(mixture, om, matrices, truth, N, n_grid, rng, dataset_id,
     rows = []
     for g, n in enumerate(n_grid):
         D = matrices[g]
-        # The safeguarded rule, not the threshold of the current Theorem 3.9: the latter
-        # returns K_hat = 1 at every horizon these experiments can reach.
+        # The threshold of Theorem 3.8. Its earlier form, M (log N / n)^(1/4), returns
+        # K_hat = 1 at every horizon these experiments can reach.
         rho = profile_distances(D)
         k_hat = profile_graph_k(None, rho=rho,
                                 threshold=safeguard_threshold(rho, int(n),
@@ -617,9 +617,9 @@ def eta_rows(mixture, om, estimate, level=0.95, extra=None):
 class ResultsWriter:
     """Append tidy rows to a CSV, flushing as they arrive.
 
-    Figures are rebuilt from these tables, never from a rerun: the expensive sweeps are
-    hours long and nothing in a figure should depend on repeating them. Flushing per batch
-    also means a run killed halfway keeps everything it had already produced.
+    A notebook's sweep writes its rows here as it goes, and the figures below it read them
+    back within the same run. Flushing per batch means a run killed halfway keeps everything
+    it had already produced, which is what makes a long grid watchable while it fills.
     """
 
     def __init__(self, path, fieldnames):

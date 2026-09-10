@@ -9,9 +9,10 @@ Contents
 Hierarchical   : ``hac_labels`` (single, complete, average), ``single_linkage_tree``,
                  ``cut_at_k``
 PAM            : ``pam``, ``pam_objective``, ``pam_certify_one_swap``
-Selecting K    : ``profile_graph_k`` cuts; ``profile_threshold`` (Theorem 3.9),
-                 ``geomean_threshold``, ``safeguard_threshold``
-                 and ``ratio_threshold`` (no constant) choose where
+Selecting K    : ``profile_graph_k`` cuts; ``safeguard_threshold`` (the threshold
+                 Theorem 3.8 states), ``profile_threshold`` (the one the earlier
+                 version stated), ``geomean_threshold`` and ``ratio_threshold``
+                 (no constant) choose where
 Selecting K, applied : ``asw_select_k``, ``average_silhouette``, ``silhouette_widths``
 Scoring        : ``exact_recovery`` (the primary outcome), ``adjusted_rand_index``
 
@@ -148,7 +149,7 @@ def hac_labels(D, K, method="average"):
 
 
 # ---------------------------------------------------------------------------
-# Selecting K: the profile graph of Theorem 3.9
+# Selecting K: the profile graph of Theorem 3.8
 # ---------------------------------------------------------------------------
 
 
@@ -188,7 +189,11 @@ def profile_distances(D):
 
 
 def profile_threshold(N, n, M):
-    """a_{N,n} = M (log N / n)^{1/4}, equation (8).
+    """a_{N,n} = M (log N / n)^{1/4}: the threshold the earlier version stated.
+
+    Superseded by `safeguard_threshold`, which is what Theorem 3.8 now states; this one is
+    kept because the two differ only in what the vanishing factor multiplies, and the
+    comparison is what shows the constant, not the exponent, was the problem.
 
     M is the largest substitution cost -- `check_assumption_metric(...)["M = max c_sub"]`,
     or M^mc for multichannel costs. The exponent 1/4 is what makes the threshold sit
@@ -202,7 +207,7 @@ def profile_threshold(N, n, M):
 
 
 def profile_graph_k(D, n=None, M=None, threshold=None, rho=None, return_labels=False):
-    """Estimate K as the number of connected components of H_{N,n}, Theorem 3.9.
+    """Estimate K as the number of connected components of H_{N,n}, Theorem 3.8.
 
     i and j are adjacent when rho(i, j) <= a_{N,n}. On the concentration event the graph has
     an edge exactly between same-component pairs, so its components *are* the true clusters:
@@ -294,7 +299,7 @@ def safeguard_threshold(rho, n, heights=None):
     above every within-component profile distance, while (log N / n)^(1/4) -> 0 keeps it
     below beta. The lower bound on the threshold is then deterministic.
 
-    Note what the exponent multiplies. The stated threshold of Theorem 3.9 is
+    Note what the exponent multiplies. The threshold the earlier version stated is
     M (log N / n)^(1/4) with M = max c_sub, a bound on increments that has no reason to be
     the scale of a threshold -- at N = 200, n = 1000 it evaluates to 0.54, above every
     profile distance in sight. Here the same vanishing factor multiplies the *observed*
