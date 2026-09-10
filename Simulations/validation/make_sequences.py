@@ -105,10 +105,18 @@ CASES = {
 def schemes_for(d, seed):
     """The cost schemes each case is checked on, as `tramineR_reference.R` reads them.
 
-    `source` says who builds the substitution matrix. "given" ships it in this file, at
-    full precision, because R cannot redraw a numpy uniform; "TRATE" means each side
-    estimates it from the sequences with its own code, which is what makes the cost
-    layer a genuine comparison rather than a shared input.
+    `source` says who builds the substitution matrix. "TRATE" and "CONSTANT" mean each
+    side builds it with its own code, from the sequences or from the rule, which is what
+    makes the cost layer a genuine comparison rather than a shared input. "given" ships
+    it in this file at full precision, and only `random` needs that: R cannot redraw a
+    numpy uniform, and agreeing on a matrix we handed over would prove nothing.
+
+    The two independent sources fail differently, and that is why both are here. TRATE
+    is estimated, so it exercises the arithmetic -- every difference the check ever
+    caught was one ulp deep in it. CONSTANT is exact in binary and cannot fail on an
+    ulp; what it pins is the *convention*, that `cval` is the off-diagonal cost, that
+    the diagonal is zero, and that TraMineR's own default indel for it, `cval / 2`, is
+    the paper's delta = 1 at `cval = 2`.
 
     `indel` is 1.0 in the three schemes the paper uses. `half_max` adds the one thing
     those three cannot test: delta = 1 is a power of two, so a border accumulated cell
@@ -116,10 +124,9 @@ def schemes_for(d, seed):
     0.5 * max(S) is not, and it is TraMineR's own default.
     """
     rng = np.random.default_rng(seed)
-    S_const, _ = cost_scheme("constant", d, sub=2.0, indel=1.0)
     S_rand, _ = cost_scheme("random", d, rng=rng, low=1.2, high=2.0)
     return {
-        "constant":      {"source": "given", "sub": S_const.tolist(), "indel": 1.0},
+        "constant":      {"source": "CONSTANT", "cval": 2.0, "indel": 1.0},
         "random":        {"source": "given", "sub": S_rand.tolist(), "indel": 1.0},
         "trate":         {"source": "TRATE", "indel": 1.0},
         "trate_halfmax": {"source": "TRATE", "indel": "half_max"},

@@ -9,10 +9,11 @@ Exits non-zero on the first failing case.
 
 Two layers are checked separately, because they fail separately:
 
-  costs      compute_trate_subst_matrix vs seqcost(method="TRATE", cval=2).
-             Only the two `trate` schemes have anything to check: `constant` and
-             `random` ship their matrix to R in cases.json, so agreeing on it would
-             prove nothing.
+  costs      compute_trate_subst_matrix vs seqcost(method="TRATE", cval=2), and
+             compute_constant_subst_matrix vs seqcost(method="CONSTANT", cval=2).
+             Both sides build these from their own code. Only `random` ships its
+             matrix to R in cases.json -- R cannot redraw a numpy uniform, and
+             agreeing on a matrix we handed over would prove nothing.
   distance   om_distance vs seqdist(method="OM", norm="none"), on whichever cost
              matrix the scheme uses.
 """
@@ -29,7 +30,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from om import compute_trate_subst_matrix, om_distance  # noqa: E402
+from om import compute_trate_subst_matrix, cost_scheme, om_distance  # noqa: E402
 
 
 def _load_sequences(cases: dict) -> dict[str, np.ndarray]:
@@ -76,6 +77,9 @@ def main() -> int:
             if spec["source"] == "TRATE":
                 S = compute_trate_subst_matrix(X, n_states=d)
                 costs_ok = np.array_equal(S, expected_sub)
+            elif spec["source"] == "CONSTANT":
+                S, _ = cost_scheme("constant", d, sub=float(spec["cval"]))
+                costs_ok = np.array_equal(S, expected_sub)
             else:
                 S = np.asarray(spec["sub"], dtype=np.float64)
                 costs_ok = None  # shipped to R in cases.json, nothing to compare
@@ -97,9 +101,11 @@ def main() -> int:
 
     if failures:
         raise AssertionError("\n".join(failures))
+    n_per_case = len(next(iter(cases.values()))["schemes"])
     n_schemes = sum(len(meta["schemes"]) for meta in cases.values())
-    print(f"\nOK - {len(cases)} cases x 4 cost schemes = {n_schemes} comparisons, "
-          "bit-identical:\n     TRATE substitution costs, indel, and raw OM distances.")
+    print(f"\nOK - {len(cases)} cases x {n_per_case} cost schemes = {n_schemes} "
+          "comparisons, bit-identical:\n     TRATE and CONSTANT substitution costs, "
+          "indel, and raw OM distances.")
     return 0
 
 

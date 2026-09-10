@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 PY="${PY:-../../.venv/bin/python}"
+RSCRIPT="${RSCRIPT:-Rscript}"          # override if R is installed but not on PATH
 PYTHONPATH="$(cd .. && pwd)" "$PY" make_sequences.py "$@"
-Rscript tramineR_reference.R
+"$RSCRIPT" tramineR_reference.R
 PYTHONPATH="$(cd .. && pwd)" "$PY" compare_om.py

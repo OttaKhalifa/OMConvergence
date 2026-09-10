@@ -12,6 +12,10 @@
 #                   i.e. 2 - P - t(P) with zero diagonal, P = seqtrate() = transition
 #                   counts row-normalised, a row of zeros where the state is never
 #                   the source of a transition
+#                 seqcost(method="CONSTANT", cval=2)  == compute_constant_subst_matrix
+#                   cval off the diagonal, zero on it. Built here rather than shipped,
+#                   so the constant scheme compares two implementations of the rule
+#                   instead of agreeing on a matrix python handed over.
 #   indel         0.5 * max(sm), or the value given  == delta, constant over states
 #   distance      seqdist(method="OM", norm="none")   == om_distance
 #
@@ -51,8 +55,15 @@ for (name in names(cases)) {
   schemes <- list()
   for (scheme in names(meta$schemes)) {
     spec <- meta$schemes[[scheme]]
-    sm <- if (spec$source == "TRATE") trate else
+    sm <- if (spec$source == "TRATE") {
+      trate
+    } else if (spec$source == "CONSTANT") {
+      cm <- suppressMessages(seqcost(s, method = "CONSTANT",
+                                     cval = as.numeric(spec$cval)))$sm
+      matrix(as.numeric(cm), nrow = length(alphabet))
+    } else {
       matrix(unlist(lapply(spec$sub, unlist)), nrow = length(alphabet), byrow = TRUE)
+    }
     indel <- if (identical(spec$indel, "half_max")) 0.5 * max(sm) else as.numeric(spec$indel)
 
     d <- suppressMessages(seqdist(s, method = "OM", sm = sm, indel = indel,
